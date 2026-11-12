@@ -24,6 +24,7 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("created_at", ASCENDING)], name="created_at_asc"),
         IndexModel([("x", ASCENDING), ("y", ASCENDING)], name="xy"),
     ],
+    "messages": [IndexModel([("created_at", DESCENDING)], name="created_at_desc")],
 }
 
 

@@ -37,6 +37,21 @@ export interface TransferResult {
   target: Player;
 }
 
+// Mirror of backend/models/game.py::ChatMessage.
+export interface ChatMessage {
+  id: string;
+  username: string;
+  color: number;
+  text: string;
+  created_at: string;
+}
+
+// Mirror of backend/models/game.py::BoardSnapshot — what GET /game/state and the SSE stream carry.
+export interface BoardState {
+  players: Player[];
+  chat: ChatMessage[];
+}
+
 // Mirror of the backend's token palette (models/game.py TOKEN_COLORS = 8).
 export const PALETTE = [
   { bg: "#10B981", border: "#34D399" },

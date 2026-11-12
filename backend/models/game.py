@@ -13,6 +13,7 @@ TOKEN_COLORS = 8
 BASE_RANGE = 2
 MAX_RANGE = 5
 MAX_HEALTH = 3
+CHAT_HISTORY = 30
 
 
 class JoinRequest(BaseModel):
@@ -51,6 +52,10 @@ class TargetRequest(ActionRequest):
     target_y: int = Field(ge=0, le=14)
 
 
+class ChatRequest(ActionRequest):
+    text: str = Field(min_length=1, max_length=140)
+
+
 class AttackResponse(BaseModel):
     attacker: Player
     target: Player | None = None  # None once the target's health reaches 0
@@ -61,3 +66,16 @@ class AttackResponse(BaseModel):
 class TransferResponse(BaseModel):
     source: Player
     target: Player
+
+
+class ChatMessage(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    username: str
+    color: int = Field(ge=0, le=TOKEN_COLORS - 1)
+    text: str = Field(min_length=1, max_length=140)
+    created_at: datetime
+
+
+class BoardSnapshot(BaseModel):
+    players: list[Player]
+    chat: list[ChatMessage]

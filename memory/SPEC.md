@@ -1,6 +1,6 @@
-# Terra Grid — SPEC
+# Grid Battle — SPEC
 
-Multiplayer strategy game. Milestone 2: the AP action economy is live.
+Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time multiplayer (SSE), live roster, in-map chat. Map is human-only — no bots; test accounts are wiped after each verification.
 
 ## Game rules (as specified by the user)
 - **15×15 grid** = the map. All players' avatars visible; own avatar has an emerald radar ring.
@@ -26,6 +26,16 @@ Multiplayer strategy game. Milestone 2: the AP action economy is live.
 - Eliminated mid-session: the client detects the commander missing from the board and forces
   the session back to the join panel with an "You were eliminated" toast.
 
+## Multiplayer (milestone 3)
+- **Real-time sync**: `GET /api/game/stream` (SSE, `event: board`, JSON BoardSnapshot `{players, chat}`).
+  Every join/move/attack/transfer/expand/chat calls `broadcast()` -> pushes a full snapshot to every
+  connected client (in-process subscriber set; single uvicorn worker). 15s keep-alive comments.
+  Client: EventSource -> `setQueryData(["board"])`; `GET /api/game/state` polled every 15s as fallback.
+  Header badge `live-sync-badge` shows LIVE / SYNCING.
+- **Roster panel** (below action bar, left): every commander — token, name, YOU tag, sector, HP pips, AP.
+- **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
+  `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
+
 ## Data model — Mongo `app.players`
 `{ id: uuid4-str, username, username_key (lowercase, UNIQUE idx), password_hash (pbkdf2_sha256),
 x, y (0–14; displayed +1), color (0–7), health (0–3), ap (≥0), range (2–5), created_at,
@@ -41,8 +51,10 @@ Indexes: username_key_unique, created_at_asc, xy (in backend/lib/db.py INDEXES["
 - `POST /api/game/transfer` `{username, password, target_x, target_y}` → `{source, target}` | 400 | 401 | 404
 - `POST /api/game/expand` `{username, password}` → Player | 400 (no AP / max range) | 401
 
+Mongo `app.messages`: `{id, username, color, text, created_at}` (index created_at_desc).
+
 ## TS mirror
-`frontend/src/lib/game.ts` (Player, AttackResult, TransferResult, PALETTE, constants) mirrors
+`frontend/src/lib/game.ts` (Player, AttackResult, TransferResult, ChatMessage, BoardState, PALETTE, constants) mirrors
 `backend/models/game.py`. Keep both in sync.
 
 ## Auth
@@ -51,7 +63,7 @@ request re-sends the pair; server verifies. No seeded accounts. No login gating.
 
 ## Frontend
 - `frontend/src/pages/Home.tsx` (map, join, banner, action bar) + `src/components/game/CellIntelCard.tsx`
-  + `src/lib/game.ts`. Polls /api/game/players every 4s.
+  + `src/lib/game.ts` + `Roster.tsx` + `ChatPanel.tsx`. Live via SSE (see Multiplayer).
 - Dark war-room theme (Space Grotesk / JetBrains Mono / DM Sans) in `src/index.css`; dark-by-default.
 - Targeting: click a button to arm a mode (highlighted, hint line appears), click a valid target
   cell; click the button again to cancel.

@@ -1,27 +1,35 @@
-"""Game map routes: join/rejoin, shared board state, and the four commander actions.
+"""Game map routes: join/rejoin, shared board state, the four commander actions, chat,
+and the SSE stream that pushes every board change to all connected commanders in real time.
 
 AP economy: every commander gets 1 AP on deployment and +1 AP at each daily 18:00
 boundary in the server timezone (APP_TZ env, default UTC). Grants are accrued lazily
 on every read/write, so restarts or downtime never lose a grant.
 """
 
+import asyncio
+import json
 import os
 import random
 from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from passlib.context import CryptContext
 from pymongo.errors import DuplicateKeyError
 
 from lib.db import db
 from models.game import (
     BASE_RANGE,
+    CHAT_HISTORY,
     MAX_HEALTH,
     MAX_RANGE,
     TOKEN_COLORS,
     ActionRequest,
     AttackResponse,
+    BoardSnapshot,
+    ChatMessage,
+    ChatRequest,
     JoinRequest,
     MoveRequest,
     Player,
@@ -33,6 +41,9 @@ router = APIRouter(prefix="/game", tags=["game"])
 
 BOARD = 15
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
+# --- Real-time fan-out: one queue per connected commander (single-process server) ---
+SUBSCRIBERS: set[asyncio.Queue[str]] = set()
 
 
 def utc_now() -> datetime:
@@ -109,6 +120,53 @@ def to_player(doc: dict) -> Player:
     )
 
 
+def to_message(doc: dict) -> ChatMessage:
+    return ChatMessage(
+        id=doc["id"],
+        username=doc["username"],
+        color=doc["color"],
+        text=doc["text"],
+        created_at=doc["created_at"].replace(tzinfo=timezone.utc),
+    )
+
+
+async def build_snapshot() -> str:
+    """Full board snapshot (players + recent chat) as JSON, with AP accrual applied."""
+    docs = await db.players.find().sort("created_at", 1).to_list(BOARD * BOARD)
+    players = []
+    for raw in docs:
+        players.append(to_player(await accrue(raw)).model_dump(mode="json"))
+    chat_docs = await db.messages.find().sort("created_at", -1).to_list(CHAT_HISTORY)
+    chat = [to_message(d).model_dump(mode="json") for d in reversed(chat_docs)]
+    return json.dumps({"players": players, "chat": chat})
+
+
+async def broadcast() -> None:
+    """Push a fresh snapshot to every connected commander's SSE stream."""
+    if not SUBSCRIBERS:
+        return
+    snap = await build_snapshot()
+    for queue in SUBSCRIBERS:
+        queue.put_nowait(snap)
+
+
+async def sse_generator(request: Request):
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    SUBSCRIBERS.add(queue)
+    try:
+        yield f"event: board\ndata: {await build_snapshot()}\n\n"
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                snap = await asyncio.wait_for(queue.get(), timeout=15.0)
+                yield f"event: board\ndata: {snap}\n\n"
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"  # keeps proxies from timing out the stream
+    finally:
+        SUBSCRIBERS.discard(queue)
+
+
 async def auth_commander(req: ActionRequest) -> dict:
     """Verify the callsign + access code pair; the raw doc (pre-accrual) on success."""
     username = req.username.strip()
@@ -116,6 +174,23 @@ async def auth_commander(req: ActionRequest) -> dict:
     if not doc or not pwd_context.verify(req.password, doc["password_hash"]):
         raise HTTPException(status_code=401, detail=f"Invalid credentials for commander {username or '?'}")
     return doc
+
+
+@router.get("/stream")
+async def stream(request: Request):
+    return StreamingResponse(
+        sse_generator(request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/state", response_model=BoardSnapshot)
+async def state():
+    docs = await db.players.find().sort("created_at", 1).to_list(BOARD * BOARD)
+    players = [to_player(await accrue(d)) for d in docs]
+    chat_docs = await db.messages.find().sort("created_at", -1).to_list(CHAT_HISTORY)
+    return BoardSnapshot(players=players, chat=[to_message(d) for d in reversed(chat_docs)])
 
 
 @router.post("/join", response_model=Player)
@@ -133,6 +208,7 @@ async def join(req: JoinRequest):
             raise HTTPException(status_code=401, detail=f"Invalid password for commander {username}")
         existing = await accrue(existing)
         await db.players.update_one({"id": existing["id"]}, {"$set": {"last_active": now}})
+        await broadcast()
         return to_player({**existing, "last_active": now})
 
     # New commander: drop onto a random FREE square (pure-random fallback once the board fills up),
@@ -172,6 +248,7 @@ async def join(req: JoinRequest):
         if existing and pwd_context.verify(req.password, existing["password_hash"]):
             return to_player(existing)
         raise HTTPException(status_code=409, detail=f"Commander {username} already exists")
+    await broadcast()
     return to_player(doc)
 
 
@@ -204,6 +281,7 @@ async def move(req: MoveRequest):
         {"id": me.id},
         {"$set": {"x": req.x, "y": req.y, "ap": me.ap - 1, "last_moved": now}},
     )
+    await broadcast()
     return to_player({**doc, "x": req.x, "y": req.y, "ap": me.ap - 1, "last_moved": now})
 
 
@@ -226,10 +304,12 @@ async def attack(req: TargetRequest):
     attacker = to_player({**doc, "ap": me.ap - 1})
     if health <= 0:
         await db.players.delete_one({"id": target_doc["id"]})
+        await broadcast()
         return AttackResponse(
             attacker=attacker, target=None, target_username=target_doc["username"], eliminated=True
         )
     await db.players.update_one({"id": target_doc["id"]}, {"$set": {"health": health}})
+    await broadcast()
     return AttackResponse(
         attacker=attacker,
         target=to_player({**target_doc, "health": health}),
@@ -255,6 +335,7 @@ async def transfer(req: TargetRequest):
     target = await accrue(target_doc)
     await db.players.update_one({"id": me.id}, {"$set": {"ap": me.ap - 1}})
     await db.players.update_one({"id": target["id"]}, {"$set": {"ap": target["ap"] + 1}})
+    await broadcast()
     return TransferResponse(
         source=to_player({**doc, "ap": me.ap - 1}),
         target=to_player({**target, "ap": target["ap"] + 1}),
@@ -270,4 +351,17 @@ async def expand(req: ActionRequest):
     if me.range >= MAX_RANGE:
         raise HTTPException(status_code=400, detail=f"Range is already at maximum ({MAX_RANGE})")
     await db.players.update_one({"id": me.id}, {"$set": {"range": me.range + 1, "ap": me.ap - 1}})
+    await broadcast()
     return to_player({**doc, "range": me.range + 1, "ap": me.ap - 1})
+
+
+@router.post("/chat", response_model=ChatMessage)
+async def chat(req: ChatRequest):
+    doc = await auth_commander(req)
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Message cannot be empty")
+    msg = ChatMessage(username=doc["username"], color=doc["color"], text=text, created_at=utc_now())
+    await db.messages.insert_one(msg.model_dump())
+    await broadcast()
+    return msg

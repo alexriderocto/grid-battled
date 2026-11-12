@@ -23,6 +23,8 @@ import type {
   Credentials,
   Player,
   TransferResult,
+  BoardState,
+  ChatMessage,
 } from "@/lib/game";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,6 +39,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Toaster } from "@/components/ui/sonner";
 import CellIntelCard from "@/components/game/CellIntelCard";
+import Roster from "@/components/game/Roster";
+import ChatPanel from "@/components/game/ChatPanel";
 
 const BOARD = 15;
 const STORAGE_KEY = "terra-grid-commander";
@@ -162,13 +166,42 @@ export default function Home() {
   const autoJoined = useRef(false);
   const joinedAtRef = useRef(0);
 
-  // Shared board state — polls so other commanders' moves and strikes appear on the map.
+  // Shared board state (players + chat). The SSE stream below pushes every change instantly;
+  // the slow poll is only a safety net if the stream drops behind a proxy.
   const playersQuery = useQuery({
-    queryKey: ["players"],
-    queryFn: () => apiGet<Player[]>("/game/players"),
-    refetchInterval: 4000,
+    queryKey: ["board"],
+    queryFn: () => apiGet<BoardState>("/game/state"),
+    refetchInterval: 15000,
   });
-  const players = playersQuery.data ?? [];
+  const players = playersQuery.data?.players ?? [];
+  const chat = playersQuery.data?.chat ?? [];
+  const [live, setLive] = useState(false);
+
+  // Real-time sync: every join/move/attack/transfer/expand/chat is broadcast to all commanders.
+  useEffect(() => {
+    const source = new EventSource("/api/game/stream");
+    source.addEventListener("board", (event) => {
+      try {
+        const snapshot = JSON.parse((event as MessageEvent<string>).data) as BoardState;
+        queryClient.setQueryData<BoardState>(["board"], snapshot);
+        setLive(true);
+      } catch {
+        // ignore a malformed frame; the next one replaces it
+      }
+    });
+    source.onerror = () => setLive(false);
+    return () => source.close();
+  }, [queryClient]);
+
+  const chatMutation = useMutation({
+    mutationFn: (text: string) => {
+      const creds = credsRef.current;
+      if (!creds) return Promise.reject(new Error("Not deployed"));
+      return apiPost<ChatMessage>("/game/chat", { ...creds, text });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["board"] }),
+    onError: (err) => toast.error(errorDetail(err, "Message failed to send")),
+  });
 
   const joinMutation = useMutation({
     mutationFn: (v: { creds: Credentials; auto: boolean }) =>
@@ -180,7 +213,7 @@ export default function Home() {
       credsRef.current = v.creds;
       joinedAtRef.current = Date.now();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(v.creds));
-      queryClient.invalidateQueries({ queryKey: ["players"] });
+      queryClient.invalidateQueries({ queryKey: ["board"] });
       if (v.auto) {
         toast.success(`Welcome back, ${player.username}`, {
           description: `Position restored to sector [${player.x + 1}, ${player.y + 1}]`,
@@ -223,7 +256,7 @@ export default function Home() {
     },
     onSuccess: (result, call) => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["players"] });
+      queryClient.invalidateQueries({ queryKey: ["board"] });
       switch (call.kind) {
         case "move": {
           const p = result as Player;
@@ -389,7 +422,7 @@ export default function Home() {
             Tactical operations
           </p>
           <h1 className="font-heading text-3xl font-bold tracking-tight text-slate-100 md:text-4xl">
-            TERRA GRID <span className="text-sky-400">15×15</span>
+            GRID <span className="text-sky-400">BATTLE</span>
           </h1>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -405,6 +438,19 @@ export default function Home() {
           >
             <Users className="mr-1 size-3" />
             {playersQuery.isError ? "MAP OFFLINE" : `${players.length} ONLINE`}
+          </Badge>
+          <Badge
+            data-testid="live-sync-badge"
+            className={`border font-mono text-[10px] uppercase tracking-wider ${
+              live
+                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                : "border-slate-700 bg-slate-800/60 text-slate-400"
+            }`}
+          >
+            <span
+              className={`mr-1.5 size-1.5 rounded-full ${live ? "animate-pulse bg-emerald-400" : "bg-slate-500"}`}
+            />
+            {live ? "Live" : "Syncing"}
           </Badge>
         </div>
       </header>
@@ -691,6 +737,16 @@ export default function Home() {
             Deploy with 1 AP · +1 AP daily at 18:00 server time
           </p>
         )}
+      </div>
+
+      {/* Multiplayer: live roster + comms channel */}
+      <div className="flex w-full max-w-4xl flex-col gap-4 md:flex-row">
+        <Roster players={players} selfId={self?.id ?? null} />
+        <ChatPanel
+          messages={chat}
+          disabled={!self || chatMutation.isPending}
+          onSend={(text) => chatMutation.mutate(text)}
+        />
       </div>
 
       {hover && <CellIntelCard player={hover.player} cx={hover.cx} cy={hover.cy} />}

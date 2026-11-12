@@ -44,6 +44,8 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # --- Real-time fan-out: one queue per connected commander (single-process server) ---
 SUBSCRIBERS: set[asyncio.Queue[str]] = set()
+# Presence: player id -> number of open, visible-tab streams (a commander may have several tabs).
+PRESENCE: dict[str, int] = {}
 
 
 def utc_now() -> datetime:
@@ -117,6 +119,7 @@ def to_player(doc: dict) -> Player:
         created_at=d["created_at"].replace(tzinfo=timezone.utc),
         last_active=d["last_active"].replace(tzinfo=timezone.utc),
         last_moved=d["last_moved"].replace(tzinfo=timezone.utc),
+        online=PRESENCE.get(d["id"], 0) > 0,
     )
 
 
@@ -150,21 +153,32 @@ async def broadcast() -> None:
         queue.put_nowait(snap)
 
 
-async def sse_generator(request: Request):
+async def sse_generator(request: Request, player_id: str | None):
     queue: asyncio.Queue[str] = asyncio.Queue()
     SUBSCRIBERS.add(queue)
+    if player_id:
+        PRESENCE[player_id] = PRESENCE.get(player_id, 0) + 1
+        await broadcast()  # everyone sees this commander flip to Online
     try:
         yield f"event: board\ndata: {await build_snapshot()}\n\n"
         while True:
             if await request.is_disconnected():
                 break
             try:
-                snap = await asyncio.wait_for(queue.get(), timeout=15.0)
+                snap = await asyncio.wait_for(queue.get(), timeout=10.0)
                 yield f"event: board\ndata: {snap}\n\n"
             except asyncio.TimeoutError:
-                yield ": keep-alive\n\n"  # keeps proxies from timing out the stream
+                yield ": keep-alive\n\n"  # keeps proxies open and surfaces dead clients within ~10s
     finally:
         SUBSCRIBERS.discard(queue)
+        if player_id:
+            left = PRESENCE.get(player_id, 0) - 1
+            if left > 0:
+                PRESENCE[player_id] = left
+            else:
+                PRESENCE.pop(player_id, None)
+            # The generator may be mid-cancellation here — announce Away from a fresh task.
+            asyncio.get_running_loop().create_task(broadcast())
 
 
 async def auth_commander(req: ActionRequest) -> dict:
@@ -177,9 +191,12 @@ async def auth_commander(req: ActionRequest) -> dict:
 
 
 @router.get("/stream")
-async def stream(request: Request):
+async def stream(request: Request, player_id: str | None = None):
+    # Only real commanders count toward presence; spectators (no/unknown id) just watch.
+    if player_id and not await db.players.find_one({"id": player_id}, {"_id": 1}):
+        player_id = None
     return StreamingResponse(
-        sse_generator(request),
+        sse_generator(request, player_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

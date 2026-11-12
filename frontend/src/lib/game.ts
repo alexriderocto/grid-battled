@@ -18,6 +18,7 @@ export interface Player {
   created_at: string;
   last_active: string;
   last_moved: string;
+  online: boolean; // true while the commander has a visible browser tab open on the game
 }
 
 export interface Credentials {

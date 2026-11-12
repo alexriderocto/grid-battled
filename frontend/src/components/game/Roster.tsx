@@ -20,7 +20,7 @@ export default function Roster({ players, selfId }: { players: Player[]; selfId:
             data-testid="roster-count"
             className="font-mono text-[10px] tracking-wider"
           >
-            {players.length}
+            {players.filter((p) => p.online).length}/{players.length}
           </Badge>
         </CardTitle>
       </CardHeader>
@@ -51,6 +51,17 @@ export default function Roster({ players, selfId }: { players: Player[]; selfId:
             </span>
             <span className="font-heading truncate text-sm font-bold text-slate-100">
               {p.username}
+            </span>
+            <span
+              data-testid={`presence-${p.username}`}
+              className={`flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider ${
+                p.online ? "text-emerald-300" : "text-slate-500"
+              }`}
+            >
+              <span
+                className={`size-1.5 rounded-full ${p.online ? "animate-pulse bg-emerald-400" : "bg-slate-600"}`}
+              />
+              {p.online ? "Online" : "Away"}
             </span>
             {p.id === selfId && (
               <Badge className="border border-emerald-500/40 bg-emerald-500/15 font-mono text-[9px] uppercase text-emerald-300">

@@ -107,7 +107,7 @@ function AvatarToken({ player, isSelf }: { player: Player; isSelf: boolean }) {
         transition={{ type: "spring", stiffness: 300, damping: 20 }}
         className={`flex size-[74%] max-h-[30px] max-w-[30px] items-center justify-center rounded-full border font-mono text-[10px] font-bold text-white shadow-md select-none md:text-xs ${
           isSelf ? "animate-radar ring-2 ring-emerald-400 ring-offset-1 ring-offset-slate-900" : ""
-        }`}
+        } ${player.online || isSelf ? "" : "opacity-50 grayscale-[40%]"}`}
         style={{ backgroundColor: tint.bg, borderColor: tint.border }}
       >
         {player.username.charAt(0).toUpperCase()}
@@ -178,8 +178,27 @@ export default function Home() {
   const [live, setLive] = useState(false);
 
   // Real-time sync: every join/move/attack/transfer/expand/chat is broadcast to all commanders.
+  // Presence: the stream carries your player id, so an open, visible tab = Online. Hiding the
+  // tab closes it (= Away); returning reopens it and the first frame is a fresh full snapshot.
+  const selfId = self?.id ?? null;
+  const [tabVisible, setTabVisible] = useState(
+    () => typeof document === "undefined" || document.visibilityState !== "hidden",
+  );
   useEffect(() => {
-    const source = new EventSource("/api/game/stream");
+    const onVisibility = () => setTabVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (!tabVisible) {
+      setLive(false);
+      return;
+    }
+    const url = selfId
+      ? `/api/game/stream?player_id=${encodeURIComponent(selfId)}`
+      : "/api/game/stream";
+    const source = new EventSource(url);
     source.addEventListener("board", (event) => {
       try {
         const snapshot = JSON.parse((event as MessageEvent<string>).data) as BoardState;
@@ -191,7 +210,7 @@ export default function Home() {
     });
     source.onerror = () => setLive(false);
     return () => source.close();
-  }, [queryClient]);
+  }, [queryClient, selfId, tabVisible]);
 
   const chatMutation = useMutation({
     mutationFn: (text: string) => {
@@ -437,7 +456,9 @@ export default function Home() {
             className="border border-sky-500/40 bg-sky-500/15 font-mono text-[10px] uppercase tracking-wider text-sky-300"
           >
             <Users className="mr-1 size-3" />
-            {playersQuery.isError ? "MAP OFFLINE" : `${players.length} ONLINE`}
+            {playersQuery.isError
+              ? "MAP OFFLINE"
+              : `${players.filter((p) => p.online).length} ONLINE · ${players.length} DEPLOYED`}
           </Badge>
           <Badge
             data-testid="live-sync-badge"

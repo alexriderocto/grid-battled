@@ -32,7 +32,13 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
   connected client (in-process subscriber set; single uvicorn worker). 15s keep-alive comments.
   Client: EventSource -> `setQueryData(["board"])`; `GET /api/game/state` polled every 15s as fallback.
   Header badge `live-sync-badge` shows LIVE / SYNCING.
-- **Roster panel** (below action bar, left): every commander — token, name, YOU tag, sector, HP pips, AP.
+- **Roster panel** (below action bar, left): every commander — token, name, Online/Away, YOU tag, sector, HP pips, AP.
+- **Presence (Online/Away)**: client opens `/api/game/stream?player_id=<own id>` only while its tab is
+  visible (visibilitychange closes/reopens the EventSource). Server `PRESENCE` dict counts open streams per
+  player id (multi-tab safe); `Player.online` = count > 0; connect/disconnect triggers a broadcast.
+  Unknown player_id is ignored (spectator stream). Away tokens render dimmed on the map; header badge
+  shows "N ONLINE · M DEPLOYED"; Cell Intel shows Online/Away. Presence is in-memory (resets on restart;
+  clients reconnect automatically).
 - **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
   `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
 

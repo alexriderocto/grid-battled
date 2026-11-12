@@ -35,7 +35,13 @@ export default function CellIntelCard({ player, cx, cy }: { player: Player; cx: 
             {player.username}
           </p>
           <p className="font-mono text-[10px] uppercase tracking-wider text-slate-400">
-            Sector [{player.x + 1}, {player.y + 1}]
+            Sector [{player.x + 1}, {player.y + 1}] ·{" "}
+            <span
+              data-testid="intel-presence"
+              className={player.online ? "text-emerald-300" : "text-slate-500"}
+            >
+              {player.online ? "Online" : "Away"}
+            </span>
           </p>
         </div>
       </div>

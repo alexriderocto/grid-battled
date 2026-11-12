@@ -33,6 +33,7 @@ class Player(BaseModel):
     created_at: datetime
     last_active: datetime
     last_moved: datetime
+    online: bool = False  # True while this commander has a visible browser tab streaming the board
 
 
 class ActionRequest(BaseModel):

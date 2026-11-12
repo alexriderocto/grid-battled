@@ -5,7 +5,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { Lock, Send } from "lucide-react";
 import { toast } from "sonner";
 import { apiPost, ApiError } from "@/lib/api";
-import { MAX_HEALTH, MAX_RANGE, PALETTE } from "@/lib/game";
+import { CLASS_INFO, MAX_HEALTH, MAX_RANGE, PALETTE } from "@/lib/game";
 import type { Credentials, DirectMessage, Player } from "@/lib/game";
 import { Button } from "@/components/ui/button";
 import {
@@ -118,7 +118,10 @@ export default function ProfileDialog({
                     )}
                   </DialogTitle>
                   <DialogDescription className="font-mono text-[10px] uppercase tracking-wider text-slate-400">
-                    Sector [{player.x + 1}, {player.y + 1}] ·{" "}
+                    <span data-testid="profile-class" className="text-sky-300">
+                      {CLASS_INFO[player.player_class ?? "standard"].label}
+                    </span>{" "}
+                    · Sector [{player.x + 1}, {player.y + 1}] ·{" "}
                     <span
                       data-testid="profile-presence"
                       className={player.online ? "text-emerald-300" : "text-slate-500"}

@@ -6,6 +6,8 @@ Mirror pair: frontend/src/lib/game.ts declares the matching TS interfaces by han
 import uuid
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # Shared game constants — keep in sync with frontend/src/lib/game.ts.
@@ -15,10 +17,20 @@ MAX_RANGE = 5
 MAX_HEALTH = 3
 CHAT_HISTORY = 30
 
+# Commander classes, picked once when a profile is created.
+#   standard — random spawn, 1 AP at deploy, +1 AP every 6pm UK time.
+#   alliance — choose your spawn square, but the first two AP grants (deploy + first 6pm) are skipped.
+PlayerClass = Literal["standard", "alliance"]
+ALLIANCE_SKIPPED_GRANTS = 2
+
 
 class JoinRequest(BaseModel):
     username: str = Field(min_length=1, max_length=24)
     password: str = Field(pattern=r"^\d{6}$")
+    # Only used when creating a NEW commander; ignored on rejoin.
+    player_class: PlayerClass = "standard"
+    spawn_x: int | None = Field(default=None, ge=0, le=14)  # required for alliance
+    spawn_y: int | None = Field(default=None, ge=0, le=14)
 
 
 class Player(BaseModel):
@@ -33,6 +45,7 @@ class Player(BaseModel):
     created_at: datetime
     last_active: datetime
     last_moved: datetime
+    player_class: PlayerClass = "standard"
     online: bool = False  # True while this commander has a visible browser tab streaming the board
 
 

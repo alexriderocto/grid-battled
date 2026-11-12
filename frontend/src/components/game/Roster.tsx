@@ -75,6 +75,14 @@ export default function Roster({
               />
               {p.online ? "Online" : "Away"}
             </span>
+            {p.player_class === "alliance" && (
+              <span
+                data-testid={`class-tag-${p.username}`}
+                className="rounded border border-amber-500/40 bg-amber-500/10 px-1 font-mono text-[9px] uppercase text-amber-300"
+              >
+                Alliance
+              </span>
+            )}
             {p.id === selfId && (
               <Badge className="border border-emerald-500/40 bg-emerald-500/15 font-mono text-[9px] uppercase text-emerald-300">
                 You

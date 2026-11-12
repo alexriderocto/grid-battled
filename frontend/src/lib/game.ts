@@ -18,6 +18,7 @@ export interface Player {
   created_at: string;
   last_active: string;
   last_moved: string;
+  player_class: PlayerClass;
   online: boolean; // true while the commander has a visible browser tab open on the game
 }
 
@@ -86,3 +87,23 @@ export interface DirectMessage {
 export interface UnreadCounts {
   counts: Record<string, number>;
 }
+
+// Mirror of backend/models/game.py::PlayerClass — picked once, when a profile is created.
+export type PlayerClass = "standard" | "alliance";
+
+export const CLASS_INFO: Record<PlayerClass, { label: string; tagline: string; perks: string[] }> = {
+  standard: {
+    label: "Standard",
+    tagline: "Normal gameplay, no modifiers",
+    perks: ["Random spawn square", "1 AP when you deploy", "+1 AP every day at 6pm UK time"],
+  },
+  alliance: {
+    label: "Alliance",
+    tagline: "Choose your spawn — at a cost",
+    perks: [
+      "You pick your spawn square",
+      "No AP when you deploy",
+      "First 6pm top-up skipped — AP starts at the second",
+    ],
+  },
+};

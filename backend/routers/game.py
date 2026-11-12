@@ -25,6 +25,7 @@ from models.game import (
     MAX_HEALTH,
     MAX_RANGE,
     TOKEN_COLORS,
+    ALLIANCE_SKIPPED_GRANTS,
     ActionRequest,
     AttackResponse,
     BoardSnapshot,
@@ -74,6 +75,8 @@ def normalize(doc: dict) -> dict:
     d.setdefault("range", BASE_RANGE)
     d.setdefault("last_moved", d.get("created_at") or now)
     d.setdefault("ap_as_of", now)
+    d.setdefault("player_class", "standard")
+    d.setdefault("ap_skip", 0)  # AP grants still to be withheld (alliance class)
     return d
 
 
@@ -102,9 +105,14 @@ async def accrue(doc: dict) -> dict:
         ap_as_of = ap_as_of.replace(tzinfo=timezone.utc)
     grants = due_boundaries(ap_as_of, utc_now(), app_tz())
     if grants:
-        d["ap"] += len(grants)
+        skipped = min(len(grants), d["ap_skip"])  # alliance: withhold the early grants
+        d["ap"] += len(grants) - skipped
+        d["ap_skip"] -= skipped
         d["ap_as_of"] = grants[-1]
-        await db.players.update_one({"id": d["id"]}, {"$set": {"ap": d["ap"], "ap_as_of": d["ap_as_of"]}})
+        await db.players.update_one(
+            {"id": d["id"]},
+            {"$set": {"ap": d["ap"], "ap_as_of": d["ap_as_of"], "ap_skip": d["ap_skip"]}},
+        )
     return d
 
 
@@ -123,6 +131,7 @@ def to_player(doc: dict) -> Player:
         created_at=d["created_at"].replace(tzinfo=timezone.utc),
         last_active=d["last_active"].replace(tzinfo=timezone.utc),
         last_moved=d["last_moved"].replace(tzinfo=timezone.utc),
+        player_class=d["player_class"],
         online=PRESENCE.get(d["id"], 0) > 0,
     )
 
@@ -247,12 +256,22 @@ async def join(req: JoinRequest):
         await broadcast()
         return to_player({**existing, "last_active": now})
 
-    # New commander: drop onto a random FREE square (pure-random fallback once the board fills up),
-    # wearing the least-used token color.
+    # New commander, wearing the least-used token color.
+    #   standard: random FREE square (pure-random fallback once the board fills up), 1 AP now.
+    #   alliance: the square they chose (must be free), and the first two AP grants are withheld.
     placed = await db.players.find({}, {"x": 1, "y": 1, "color": 1}).to_list(BOARD * BOARD)
     taken = {(d["x"], d["y"]) for d in placed}
-    free = [(x, y) for x in range(BOARD) for y in range(BOARD) if (x, y) not in taken]
-    x, y = random.choice(free) if free else (random.randrange(BOARD), random.randrange(BOARD))
+    if req.player_class == "alliance":
+        if req.spawn_x is None or req.spawn_y is None:
+            raise HTTPException(status_code=422, detail="Alliance commanders must choose a spawn square")
+        if (req.spawn_x, req.spawn_y) in taken:
+            raise HTTPException(status_code=400, detail="That spawn square is already occupied — pick another")
+        x, y = req.spawn_x, req.spawn_y
+        start_ap, ap_skip = 0, ALLIANCE_SKIPPED_GRANTS - 1  # deploy grant withheld now, first 6pm later
+    else:
+        free = [(fx, fy) for fx in range(BOARD) for fy in range(BOARD) if (fx, fy) not in taken]
+        x, y = random.choice(free) if free else (random.randrange(BOARD), random.randrange(BOARD))
+        start_ap, ap_skip = 1, 0  # "at the beginning" grant
     usage = [0] * TOKEN_COLORS
     for d in placed:
         usage[d.get("color", 0) % TOKEN_COLORS] += 1
@@ -264,14 +283,16 @@ async def join(req: JoinRequest):
         y=y,
         color=color,
         health=MAX_HEALTH,
-        ap=1,  # "at the beginning" grant
+        ap=start_ap,
         range=BASE_RANGE,
         created_at=now,
         last_active=now,
         last_moved=now,
+        player_class=req.player_class,
     )
     doc = {
-        **player.model_dump(),
+        **player.model_dump(exclude={"online"}),
+        "ap_skip": ap_skip,
         "ap_as_of": now,
         "username_key": username_key,
         "password_hash": pwd_context.hash(req.password),

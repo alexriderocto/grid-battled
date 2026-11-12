@@ -42,6 +42,18 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
 - **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
   `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
 
+## Classes (milestone 5) — chosen once, when a NEW profile is created
+- Flow: enter callsign + code -> Join. If the callsign is on the board (case-insensitive) it's a straight
+  rejoin (class locked). Otherwise the ClassPicker replaces the join panel: pick Standard or Alliance
+  (Alliance: click a free map square to set spawn, amber marker) -> "Deploy as …". Back returns to the form.
+- **Standard**: no modifiers — random free spawn, 1 AP at deploy, +1 AP every 6pm UK time.
+- **Alliance**: choose spawn square (must be free, else 400); first two AP grants skipped = 0 AP at deploy
+  AND the first 6pm grant withheld (stored `ap_skip`=1, decremented in accrue); AP starts at the 2nd 6pm.
+- `POST /api/game/join` accepts optional `player_class` ("standard" default | "alliance"), `spawn_x`,
+  `spawn_y` (0–14, required for alliance -> else 422). Ignored on rejoin. Player gains `player_class`.
+- Shown in: banner "Class: …", profile dialog, roster "Alliance" tag. Pre-class players default to standard.
+- Eliminated commanders are deleted, so redeploying = new profile = choose class again.
+
 ## Commander profile + private messages (milestone 4)
 - Click any commander (map token when no action is armed, or roster row) -> ProfileDialog: AP, range
   (n/5), HP, sector, Online/Away, last moved; plus a private DM thread (if you're deployed and it isn't you).

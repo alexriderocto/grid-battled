@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import {
+  CLASS_INFO,
   MAX_HEALTH,
   MAX_RANGE,
   PALETTE,
@@ -26,6 +27,7 @@ import type {
   BoardState,
   ChatMessage,
   UnreadCounts,
+  PlayerClass,
 } from "@/lib/game";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +45,7 @@ import CellIntelCard from "@/components/game/CellIntelCard";
 import Roster from "@/components/game/Roster";
 import ChatPanel from "@/components/game/ChatPanel";
 import ProfileDialog from "@/components/game/ProfileDialog";
+import ClassPicker from "@/components/game/ClassPicker";
 
 const BOARD = 15;
 const STORAGE_KEY = "terra-grid-commander";
@@ -165,6 +168,11 @@ export default function Home() {
   const [mode, setMode] = useState<ActionMode | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
+  // New-profile step 2: class choice (and Alliance spawn square) before the commander is created.
+  const [newProfile, setNewProfile] = useState<Credentials | null>(null);
+  const [pickedClass, setPickedClass] = useState<PlayerClass | null>(null);
+  const [spawn, setSpawn] = useState<{ x: number; y: number } | null>(null);
+  const pickingSpawn = newProfile !== null && pickedClass === "alliance";
   const credsRef = useRef<Credentials | null>(null);
   const autoJoined = useRef(false);
   const joinedAtRef = useRef(0);
@@ -255,10 +263,16 @@ export default function Home() {
   });
 
   const joinMutation = useMutation({
-    mutationFn: (v: { creds: Credentials; auto: boolean }) =>
-      apiPost<Player>("/game/join", v.creds),
+    mutationFn: (v: {
+      creds: Credentials;
+      auto: boolean;
+      create?: { player_class: PlayerClass; spawn_x?: number; spawn_y?: number };
+    }) => apiPost<Player>("/game/join", { ...v.creds, ...v.create }),
     onSuccess: (player, v) => {
       setSelf(player);
+      setNewProfile(null);
+      setPickedClass(null);
+      setSpawn(null);
       setError(null);
       setMode(null);
       credsRef.current = v.creds;
@@ -269,14 +283,23 @@ export default function Home() {
         toast.success(`Welcome back, ${player.username}`, {
           description: `Position restored to sector [${player.x + 1}, ${player.y + 1}]`,
         });
-      } else {
+      } else if (v.create?.player_class === "alliance") {
+        toast.success(`Alliance commander ${player.username} deployed`, {
+          description: `Holding your chosen sector [${player.x + 1}, ${player.y + 1}] · AP starts from your second 6pm top-up`,
+        });
+      } else if (v.create) {
         toast.success(`Commander ${player.username} deployed`, {
           description: `Dropped into sector [${player.x + 1}, ${player.y + 1}] · 1 AP granted`,
         });
+      } else {
+        toast.success(`Welcome back, ${player.username}`, {
+          description: `Position restored to sector [${player.x + 1}, ${player.y + 1}]`,
+        });
       }
     },
-    onError: (err) => {
+    onError: (err, v) => {
       const message = errorDetail(err, "Cannot reach command — try again shortly");
+      if (v.create?.player_class === "alliance") setSpawn(null); // likely taken meanwhile — re-pick
       setError(message);
       toast.error(message);
     },
@@ -403,7 +426,30 @@ export default function Home() {
       setError("Access code must be exactly 6 digits.");
       return;
     }
-    joinMutation.mutate({ creds: { username: name, password }, auto: false });
+    const creds = { username: name, password };
+    // Existing callsign -> straight rejoin (class is already locked in). New -> pick a class first.
+    if (players.some((p) => p.username.toLowerCase() === name.toLowerCase())) {
+      joinMutation.mutate({ creds, auto: false });
+    } else {
+      setError(null);
+      setNewProfile(creds);
+      setPickedClass(null);
+      setSpawn(null);
+    }
+  };
+
+  const deployNewProfile = () => {
+    if (!newProfile || !pickedClass) return;
+    if (pickedClass === "alliance") {
+      if (!spawn) return;
+      joinMutation.mutate({
+        creds: newProfile,
+        auto: false,
+        create: { player_class: "alliance", spawn_x: spawn.x, spawn_y: spawn.y },
+      });
+    } else {
+      joinMutation.mutate({ creds: newProfile, auto: false, create: { player_class: "standard" } });
+    }
   };
 
   const handleLeave = () => {
@@ -423,6 +469,14 @@ export default function Home() {
   const toggleMode = (kind: ActionMode) => setMode((m) => (m === kind ? null : kind));
 
   const onCellClick = (x: number, y: number) => {
+    if (pickingSpawn) {
+      if (occupied.has(`${y}:${x}`)) {
+        toast.error("That square is occupied — pick a free one");
+      } else {
+        setSpawn({ x, y });
+      }
+      return;
+    }
     if (mode) {
       act.mutate({ kind: mode, x, y });
       return;
@@ -572,6 +626,13 @@ export default function Home() {
             >
               Range: {self.range}
             </Badge>
+            <Badge
+              variant="secondary"
+              data-testid="class-display"
+              className="font-mono text-[10px] uppercase tracking-wider"
+            >
+              Class: {CLASS_INFO[self.player_class ?? "standard"].label}
+            </Badge>
             <Badge className="border border-emerald-500/40 bg-emerald-500/15 font-mono text-[10px] uppercase tracking-wider text-emerald-300">
               Active online
             </Badge>
@@ -582,6 +643,23 @@ export default function Home() {
             </div>
           </CardContent>
         </Card>
+      ) : newProfile ? (
+        <ClassPicker
+          username={newProfile.username}
+          selected={pickedClass}
+          spawn={spawn}
+          pending={joinMutation.isPending}
+          onSelect={(c) => {
+            setPickedClass(c);
+            if (c !== "alliance") setSpawn(null);
+          }}
+          onDeploy={deployNewProfile}
+          onBack={() => {
+            setNewProfile(null);
+            setPickedClass(null);
+            setSpawn(null);
+          }}
+        />
       ) : (
         <Card
           data-testid="join-panel"
@@ -733,9 +811,17 @@ export default function Home() {
                             : "border-blue-700/40 bg-[#172554]/70"
                           : rangeShadeFor(c, r, p) ||
                             "border-slate-800/80 bg-[#0F172A] hover:border-sky-500/60 hover:bg-slate-800/90"
-                      } ${targetRingFor(c, r, p)} ${p && !mode ? "cursor-pointer" : ""}`}
+                      } ${targetRingFor(c, r, p)} ${p && !mode ? "cursor-pointer" : ""} ${
+                        pickingSpawn && !p ? "cursor-crosshair hover:ring-1 hover:ring-amber-400/70" : ""
+                      } ${spawn && spawn.x === c && spawn.y === r ? "!border-amber-400 !bg-amber-500/25 ring-2 ring-amber-400" : ""}`}
                     >
                       {p && <AvatarToken player={p} isSelf={isSelf} />}
+                      {!p && spawn && spawn.x === c && spawn.y === r && (
+                        <span
+                          data-testid="spawn-marker"
+                          className="size-2.5 animate-pulse rounded-full bg-amber-300"
+                        />
+                      )}
                     </div>
                   );
                 }),
@@ -795,7 +881,7 @@ export default function Home() {
             data-testid="ap-rule-hint"
             className="text-center font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500"
           >
-            Deploy with 1 AP · +1 AP daily at 6pm UK time
+            Standard deploys with 1 AP · Alliance skips the first two · +1 AP daily at 6pm UK time
           </p>
         )}
       </div>

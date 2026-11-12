@@ -69,3 +69,20 @@ export const PALETTE = [
 export function manhattan(ax: number, ay: number, bx: number, by: number): number {
   return Math.abs(ax - bx) + Math.abs(ay - by);
 }
+
+// Mirror of backend/models/game.py::DirectMessage — private, only sender & recipient can fetch it.
+export interface DirectMessage {
+  id: string;
+  from_id: string;
+  from_username: string;
+  to_id: string;
+  to_username: string;
+  text: string;
+  created_at: string;
+  read: boolean;
+}
+
+// Mirror of backend/models/game.py::UnreadCounts — sender player id -> unread count.
+export interface UnreadCounts {
+  counts: Record<string, number>;
+}

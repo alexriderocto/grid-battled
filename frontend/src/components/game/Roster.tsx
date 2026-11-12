@@ -4,7 +4,17 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 /** Live roster — every commander on the grid: who, where, how hurt, how much AP. */
-export default function Roster({ players, selfId }: { players: Player[]; selfId: string | null }) {
+export default function Roster({
+  players,
+  selfId,
+  unread,
+  onSelect,
+}: {
+  players: Player[];
+  selfId: string | null;
+  unread: Record<string, number>;
+  onSelect: (p: Player) => void;
+}) {
   const ordered = [...players].sort((a, b) => (a.id === selfId ? -1 : b.id === selfId ? 1 : 0));
 
   return (
@@ -31,10 +41,12 @@ export default function Roster({ players, selfId }: { players: Player[]; selfId:
           </p>
         )}
         {ordered.map((p) => (
-          <div
+          <button
+            type="button"
             key={p.id}
             data-testid={`roster-row-${p.username}`}
-            className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 ${
+            onClick={() => onSelect(p)}
+            className={`flex w-full cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors duration-150 hover:border-sky-500/50 ${
               p.id === selfId
                 ? "border-emerald-500/40 bg-emerald-950/40"
                 : "border-slate-800/70 bg-slate-950/50"
@@ -82,7 +94,15 @@ export default function Roster({ players, selfId }: { players: Player[]; selfId:
             <span className="font-mono text-[10px] uppercase tracking-wider text-sky-300">
               {p.ap} AP
             </span>
-          </div>
+            {(unread[p.id] ?? 0) > 0 && (
+              <span
+                data-testid={`unread-badge-${p.username}`}
+                className="flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 font-mono text-[9px] font-bold text-white"
+              >
+                {unread[p.id]}
+              </span>
+            )}
+          </button>
         ))}
       </CardContent>
     </Card>

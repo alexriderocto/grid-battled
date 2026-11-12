@@ -42,6 +42,20 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
 - **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
   `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
 
+## Commander profile + private messages (milestone 4)
+- Click any commander (map token when no action is armed, or roster row) -> ProfileDialog: AP, range
+  (n/5), HP, sector, Online/Away, last moved; plus a private DM thread (if you're deployed and it isn't you).
+- `POST /api/game/dm/send {username,password,to_id,text<=280}` -> DirectMessage | 400 self | 404 gone | 401 | 422
+- `POST /api/game/dm/thread {username,password,with_id}` -> DirectMessage[] (oldest first, last 100);
+  marks their messages to you read. Only returns the pair (you <-> with_id), so nobody can read others' DMs.
+- `POST /api/game/dm/unread {username,password}` -> `{counts: {sender_id: n}}`
+- Real-time: SSE `event: dm` (empty `{}` payload — content-free ping) goes only to the streams of the
+  sender + recipient; client refetches unread + thread. Roster shows a rose unread badge; a toast with
+  an "Open" action pops for new messages (not for the thread currently open).
+- Mongo `app.dms`: `{id, from_id, from_username, to_id, to_username, text, created_at, read}`
+  (indexes to_read, pair_created). Stream presence id is unauthenticated, so a spoofer could at most
+  learn *that* someone had DM activity — never the content.
+
 ## Data model — Mongo `app.players`
 `{ id: uuid4-str, username, username_key (lowercase, UNIQUE idx), password_hash (pbkdf2_sha256),
 x, y (0–14; displayed +1), color (0–7), health (0–3), ap (≥0), range (2–5), created_at,

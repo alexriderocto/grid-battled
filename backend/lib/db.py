@@ -25,6 +25,10 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("x", ASCENDING), ("y", ASCENDING)], name="xy"),
     ],
     "messages": [IndexModel([("created_at", DESCENDING)], name="created_at_desc")],
+    "dms": [
+        IndexModel([("to_id", ASCENDING), ("read", ASCENDING)], name="to_read"),
+        IndexModel([("from_id", ASCENDING), ("to_id", ASCENDING), ("created_at", ASCENDING)], name="pair_created"),
+    ],
 }
 
 

@@ -80,3 +80,27 @@ class ChatMessage(BaseModel):
 class BoardSnapshot(BaseModel):
     players: list[Player]
     chat: list[ChatMessage]
+
+
+class DirectMessage(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    from_id: str
+    from_username: str
+    to_id: str
+    to_username: str
+    text: str = Field(min_length=1, max_length=280)
+    created_at: datetime
+    read: bool = False
+
+
+class DMSendRequest(ActionRequest):
+    to_id: str
+    text: str = Field(min_length=1, max_length=280)
+
+
+class DMThreadRequest(ActionRequest):
+    with_id: str
+
+
+class UnreadCounts(BaseModel):
+    counts: dict[str, int]  # sender player id -> unread private messages from them

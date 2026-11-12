@@ -25,6 +25,7 @@ import type {
   TransferResult,
   BoardState,
   ChatMessage,
+  UnreadCounts,
 } from "@/lib/game";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,7 @@ import { Toaster } from "@/components/ui/sonner";
 import CellIntelCard from "@/components/game/CellIntelCard";
 import Roster from "@/components/game/Roster";
 import ChatPanel from "@/components/game/ChatPanel";
+import ProfileDialog from "@/components/game/ProfileDialog";
 
 const BOARD = 15;
 const STORAGE_KEY = "terra-grid-commander";
@@ -162,6 +164,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<ActionMode | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
+  const [profileId, setProfileId] = useState<string | null>(null);
   const credsRef = useRef<Credentials | null>(null);
   const autoJoined = useRef(false);
   const joinedAtRef = useRef(0);
@@ -208,9 +211,38 @@ export default function Home() {
         // ignore a malformed frame; the next one replaces it
       }
     });
+    // Private-message activity ping (content-free): refetch my unread counts + any open thread.
+    source.addEventListener("dm", () => {
+      void queryClient.invalidateQueries({ queryKey: ["dm-unread"] });
+      void queryClient.invalidateQueries({ queryKey: ["dm-thread"] });
+    });
     source.onerror = () => setLive(false);
     return () => source.close();
   }, [queryClient, selfId, tabVisible]);
+
+  // Unread private messages, per sender — refreshed by the SSE "dm" ping.
+  const unreadQuery = useQuery({
+    queryKey: ["dm-unread", self?.id],
+    queryFn: () => apiPost<UnreadCounts>("/game/dm/unread", credsRef.current),
+    enabled: Boolean(self),
+  });
+  const unread = self ? (unreadQuery.data?.counts ?? {}) : {};
+  const prevUnread = useRef<Record<string, number>>({});
+  const unreadKey = JSON.stringify(unread);
+  useEffect(() => {
+    const counts = JSON.parse(unreadKey) as Record<string, number>;
+    for (const [fromId, n] of Object.entries(counts)) {
+      if (n > (prevUnread.current[fromId] ?? 0) && fromId !== profileId) {
+        const sender = players.find((p) => p.id === fromId);
+        toast(`Private message from ${sender?.username ?? "a commander"}`, {
+          action: { label: "Open", onClick: () => setProfileId(fromId) },
+        });
+      }
+    }
+    prevUnread.current = counts;
+    // players intentionally omitted: a board refresh must not re-toast old messages
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unreadKey, profileId]);
 
   const chatMutation = useMutation({
     mutationFn: (text: string) => {
@@ -391,8 +423,16 @@ export default function Home() {
   const toggleMode = (kind: ActionMode) => setMode((m) => (m === kind ? null : kind));
 
   const onCellClick = (x: number, y: number) => {
-    if (!mode) return;
-    act.mutate({ kind: mode, x, y });
+    if (mode) {
+      act.mutate({ kind: mode, x, y });
+      return;
+    }
+    // No action armed: clicking a commander opens their profile + private channel.
+    const p = occupied.get(`${y}:${x}`);
+    if (p) {
+      setHover(null);
+      setProfileId(p.id);
+    }
   };
 
   const cols = Array.from({ length: BOARD }, (_, i) => i);
@@ -693,7 +733,7 @@ export default function Home() {
                             : "border-blue-700/40 bg-[#172554]/70"
                           : rangeShadeFor(c, r, p) ||
                             "border-slate-800/80 bg-[#0F172A] hover:border-sky-500/60 hover:bg-slate-800/90"
-                      } ${targetRingFor(c, r, p)}`}
+                      } ${targetRingFor(c, r, p)} ${p && !mode ? "cursor-pointer" : ""}`}
                     >
                       {p && <AvatarToken player={p} isSelf={isSelf} />}
                     </div>
@@ -762,13 +802,25 @@ export default function Home() {
 
       {/* Multiplayer: live roster + comms channel */}
       <div className="flex w-full max-w-4xl flex-col gap-4 md:flex-row">
-        <Roster players={players} selfId={self?.id ?? null} />
+        <Roster
+          players={players}
+          selfId={self?.id ?? null}
+          unread={unread}
+          onSelect={(p) => setProfileId(p.id)}
+        />
         <ChatPanel
           messages={chat}
           disabled={!self || chatMutation.isPending}
           onSend={(text) => chatMutation.mutate(text)}
         />
       </div>
+
+      <ProfileDialog
+        player={players.find((p) => p.id === profileId) ?? null}
+        self={self}
+        creds={self ? credsRef.current : null}
+        onClose={() => setProfileId(null)}
+      />
 
       {hover && <CellIntelCard player={hover.player} cx={hover.cx} cy={hover.cy} />}
     </div>

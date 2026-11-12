@@ -30,11 +30,15 @@ from models.game import (
     BoardSnapshot,
     ChatMessage,
     ChatRequest,
+    DirectMessage,
+    DMSendRequest,
+    DMThreadRequest,
     JoinRequest,
     MoveRequest,
     Player,
     TargetRequest,
     TransferResponse,
+    UnreadCounts,
 )
 
 router = APIRouter(prefix="/game", tags=["game"])
@@ -42,8 +46,8 @@ router = APIRouter(prefix="/game", tags=["game"])
 BOARD = 15
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-# --- Real-time fan-out: one queue per connected commander (single-process server) ---
-SUBSCRIBERS: set[asyncio.Queue[str]] = set()
+# --- Real-time fan-out: one queue per connected stream -> the commander id it belongs to (None = spectator) ---
+SUBSCRIBERS: dict[asyncio.Queue[str], str | None] = {}
 # Presence: player id -> number of open, visible-tab streams (a commander may have several tabs).
 PRESENCE: dict[str, int] = {}
 
@@ -153,9 +157,21 @@ async def broadcast() -> None:
         queue.put_nowait(snap)
 
 
+DM_PING = "__dm__"
+
+
+def notify_dm(*player_ids: str) -> None:
+    """Content-free 'you have DM activity' ping to the given commanders' streams.
+    Message text is only ever returned by the credential-checked /dm endpoints."""
+    targets = set(player_ids)
+    for queue, pid in SUBSCRIBERS.items():
+        if pid in targets:
+            queue.put_nowait(DM_PING)
+
+
 async def sse_generator(request: Request, player_id: str | None):
     queue: asyncio.Queue[str] = asyncio.Queue()
-    SUBSCRIBERS.add(queue)
+    SUBSCRIBERS[queue] = player_id
     if player_id:
         PRESENCE[player_id] = PRESENCE.get(player_id, 0) + 1
         await broadcast()  # everyone sees this commander flip to Online
@@ -166,11 +182,14 @@ async def sse_generator(request: Request, player_id: str | None):
                 break
             try:
                 snap = await asyncio.wait_for(queue.get(), timeout=10.0)
-                yield f"event: board\ndata: {snap}\n\n"
+                if snap == DM_PING:
+                    yield "event: dm\ndata: {}\n\n"
+                else:
+                    yield f"event: board\ndata: {snap}\n\n"
             except asyncio.TimeoutError:
                 yield ": keep-alive\n\n"  # keeps proxies open and surfaces dead clients within ~10s
     finally:
-        SUBSCRIBERS.discard(queue)
+        SUBSCRIBERS.pop(queue, None)
         if player_id:
             left = PRESENCE.get(player_id, 0) - 1
             if left > 0:
@@ -382,3 +401,69 @@ async def chat(req: ChatRequest):
     await db.messages.insert_one(msg.model_dump())
     await broadcast()
     return msg
+
+
+# --- Private messages: only sender & recipient can read a thread (credential-checked) ---
+
+def to_dm(doc: dict) -> DirectMessage:
+    return DirectMessage(
+        id=doc["id"],
+        from_id=doc["from_id"],
+        from_username=doc["from_username"],
+        to_id=doc["to_id"],
+        to_username=doc["to_username"],
+        text=doc["text"],
+        created_at=doc["created_at"].replace(tzinfo=timezone.utc),
+        read=doc.get("read", False),
+    )
+
+
+@router.post("/dm/send", response_model=DirectMessage)
+async def dm_send(req: DMSendRequest):
+    me = await auth_commander(req)
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Message cannot be empty")
+    if req.to_id == me["id"]:
+        raise HTTPException(status_code=400, detail="You cannot message yourself")
+    target = await db.players.find_one({"id": req.to_id}, {"id": 1, "username": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="That commander is no longer on the grid")
+    msg = DirectMessage(
+        from_id=me["id"],
+        from_username=me["username"],
+        to_id=target["id"],
+        to_username=target["username"],
+        text=text,
+        created_at=utc_now(),
+    )
+    await db.dms.insert_one(msg.model_dump())
+    notify_dm(me["id"], target["id"])
+    return msg
+
+
+@router.post("/dm/thread", response_model=list[DirectMessage])
+async def dm_thread(req: DMThreadRequest):
+    """The conversation between you and `with_id` (oldest first); marks their messages to you read."""
+    me = await auth_commander(req)
+    pair = {"$or": [
+        {"from_id": me["id"], "to_id": req.with_id},
+        {"from_id": req.with_id, "to_id": me["id"]},
+    ]}
+    docs = await db.dms.find(pair).sort("created_at", -1).to_list(100)
+    result = await db.dms.update_many(
+        {"from_id": req.with_id, "to_id": me["id"], "read": False}, {"$set": {"read": True}}
+    )
+    if result.modified_count:
+        notify_dm(me["id"])  # other tabs of mine clear their unread badge
+    return [to_dm({**d, "read": True} if d["to_id"] == me["id"] else d) for d in reversed(docs)]
+
+
+@router.post("/dm/unread", response_model=UnreadCounts)
+async def dm_unread(req: ActionRequest):
+    me = await auth_commander(req)
+    rows = await db.dms.aggregate([
+        {"$match": {"to_id": me["id"], "read": False}},
+        {"$group": {"_id": "$from_id", "n": {"$sum": 1}}},
+    ]).to_list(500)
+    return UnreadCounts(counts={r["_id"]: r["n"] for r in rows})

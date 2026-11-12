@@ -284,7 +284,7 @@ async def move(req: MoveRequest):
     doc = await accrue(await auth_commander(req))
     me = to_player(doc)
     if me.ap < 1:
-        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 18:00 server time")
+        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
     dist = manhattan(me.x, me.y, req.x, req.y)
     if dist == 0:
         raise HTTPException(status_code=400, detail="You are already standing there")
@@ -307,7 +307,7 @@ async def attack(req: TargetRequest):
     doc = await accrue(await auth_commander(req))
     me = to_player(doc)
     if me.ap < 1:
-        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 18:00 server time")
+        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
     target_doc = await db.players.find_one({"x": req.target_x, "y": req.target_y})
     if not target_doc:
         raise HTTPException(status_code=404, detail="No commander on that square")
@@ -340,7 +340,7 @@ async def transfer(req: TargetRequest):
     doc = await accrue(await auth_commander(req))
     me = to_player(doc)
     if me.ap < 1:
-        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 18:00 server time")
+        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
     target_doc = await db.players.find_one({"x": req.target_x, "y": req.target_y})
     if not target_doc:
         raise HTTPException(status_code=404, detail="No commander on that square")
@@ -364,7 +364,7 @@ async def expand(req: ActionRequest):
     doc = await accrue(await auth_commander(req))
     me = to_player(doc)
     if me.ap < 1:
-        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 18:00 server time")
+        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
     if me.range >= MAX_RANGE:
         raise HTTPException(status_code=400, detail=f"Range is already at maximum ({MAX_RANGE})")
     await db.players.update_one({"id": me.id}, {"$set": {"range": me.range + 1, "ap": me.ap - 1}})

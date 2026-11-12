@@ -755,7 +755,7 @@ export default function Home() {
             data-testid="ap-rule-hint"
             className="text-center font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500"
           >
-            Deploy with 1 AP · +1 AP daily at 18:00 server time
+            Deploy with 1 AP · +1 AP daily at 6pm UK time
           </p>
         )}
       </div>

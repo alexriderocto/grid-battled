@@ -10,7 +10,7 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
 - **Range**: a shaded diamond around each commander, manhattan distance ≤ range. Base range 2
   (BASE_RANGE). Own range = sky tint; other commanders' reach = faint rose tint.
 - **AP**: every commander gets 1 AP at deployment ("the beginning") and +1 AP at each daily 18:00
-  in the server timezone (APP_TZ env in backend/.env, default UTC — "6pm local time"). Grants are
+  at 6pm UK time all year (APP_TZ="Europe/London" in backend/.env — GMT in winter, BST in summer). Grants are
   accrued lazily on every read/write, so restarts/downtime never lose one. Next grant is NOT
   double-counted. Pre-milestone-2 players are backfilled (ap=1, health=3, range=2) on first read.
 - **4 action buttons below the grid** (each costs 1 AP; identity = username+password in body):
@@ -77,4 +77,4 @@ request re-sends the pair; server verifies. No seeded accounts. No login gating.
 ## Assumptions taken (user didn't specify)
 - Expand costs 1 AP and is capped at range 5.
 - Elimination at 0 HP removes the commander until they rejoin (fresh deploy).
-- No kill rewards, no healing. "6pm local time" = server timezone (APP_TZ, default UTC).
+- No kill rewards, no healing. "6pm local time" = 6pm UK time (APP_TZ=Europe/London).

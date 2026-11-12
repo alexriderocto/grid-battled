@@ -2,9 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { Crosshair, Users } from "lucide-react";
+import {
+  ArrowLeftRight,
+  Crosshair,
+  Footprints,
+  Maximize2,
+  Swords,
+  Users,
+} from "lucide-react";
 import { toast } from "sonner";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
+import {
+  MAX_HEALTH,
+  MAX_RANGE,
+  PALETTE,
+  manhattan,
+} from "@/lib/game";
+import type {
+  AttackResult,
+  Credentials,
+  Player,
+  TransferResult,
+} from "@/lib/game";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,36 +36,29 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Toaster } from "@/components/ui/sonner";
-
-// Hand-written mirror of backend/models/game.py::Player — nothing infers across the HTTP boundary.
-interface Player {
-  id: string;
-  username: string;
-  x: number;
-  y: number;
-  color: number;
-  created_at: string;
-  last_active: string;
-}
+import CellIntelCard from "@/components/game/CellIntelCard";
 
 const BOARD = 15;
 const STORAGE_KEY = "terra-grid-commander";
 
-// Mirror of the backend's token palette (models/game.py TOKEN_COLORS = 8) — keep the pair in sync.
-const PALETTE = [
-  { bg: "#10B981", border: "#34D399" },
-  { bg: "#D97706", border: "#FBBF24" },
-  { bg: "#0284C7", border: "#38BDF8" },
-  { bg: "#E11D48", border: "#FB7185" },
-  { bg: "#7C3AED", border: "#A78BFA" },
-  { bg: "#4F46E5", border: "#818CF8" },
-  { bg: "#C026D3", border: "#E879F9" },
-  { bg: "#0D9488", border: "#2DD4BF" },
-] as const;
+type ActionMode = "attack" | "move" | "transfer";
 
-interface Credentials {
-  username: string;
-  password: string;
+type ActionCall =
+  | { kind: "attack"; x: number; y: number }
+  | { kind: "move"; x: number; y: number }
+  | { kind: "transfer"; x: number; y: number }
+  | { kind: "expand" };
+
+const ACTION_HINTS: Record<ActionMode, string> = {
+  attack: "Select a commander in range to strike — deals 1 damage · 1 AP",
+  move: "Select an empty square in range to relocate · 1 AP",
+  transfer: "Select a commander in range to gift 1 of your AP",
+};
+
+interface HoverState {
+  player: Player;
+  cx: number;
+  cy: number;
 }
 
 function loadCredentials(): Credentials | null {
@@ -78,26 +90,63 @@ function errorDetail(err: unknown, fallback: string): string {
 
 function AvatarToken({ player, isSelf }: { player: Player; isSelf: boolean }) {
   const tint = PALETTE[player.color % PALETTE.length];
-  const token = (
-    <motion.span
-      data-testid={`player-avatar-${player.username}`}
-      title={`${player.username} [${player.x + 1}, ${player.y + 1}]`}
-      initial={{ scale: 0, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      transition={{ type: "spring", stiffness: 300, damping: 20 }}
-      className={`flex size-[74%] max-h-[30px] max-w-[30px] items-center justify-center rounded-full border font-mono text-[10px] font-bold text-white shadow-md select-none md:text-xs ${
-        isSelf ? "animate-radar ring-2 ring-emerald-400 ring-offset-1 ring-offset-slate-900" : ""
-      }`}
-      style={{ backgroundColor: tint.bg, borderColor: tint.border }}
-    >
-      {player.username.charAt(0).toUpperCase()}
-    </motion.span>
-  );
-  if (!isSelf) return token;
+  const damaged = player.health < MAX_HEALTH;
   return (
-    <span data-testid="self-avatar-highlight" className="flex items-center justify-center">
-      {token}
+    <span
+      data-testid={isSelf ? "self-avatar-highlight" : undefined}
+      className="relative flex size-full items-center justify-center"
+    >
+      <motion.span
+        data-testid={`player-avatar-${player.username}`}
+        initial={{ scale: 0, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 300, damping: 20 }}
+        className={`flex size-[74%] max-h-[30px] max-w-[30px] items-center justify-center rounded-full border font-mono text-[10px] font-bold text-white shadow-md select-none md:text-xs ${
+          isSelf ? "animate-radar ring-2 ring-emerald-400 ring-offset-1 ring-offset-slate-900" : ""
+        }`}
+        style={{ backgroundColor: tint.bg, borderColor: tint.border }}
+      >
+        {player.username.charAt(0).toUpperCase()}
+      </motion.span>
+      {damaged && (
+        <span
+          data-testid={`health-badge-${player.username}`}
+          className="absolute -right-1 -bottom-1 flex size-3.5 items-center justify-center rounded-full border border-red-300 bg-red-600 font-mono text-[8px] font-bold text-white"
+        >
+          {player.health}
+        </span>
+      )}
     </span>
+  );
+}
+
+function ActionButton({
+  kind,
+  active,
+  icon: Icon,
+  label,
+  disabled,
+  onToggle,
+}: {
+  kind: ActionMode;
+  active: boolean;
+  icon: typeof Swords;
+  label: string;
+  disabled: boolean;
+  onToggle: (kind: ActionMode) => void;
+}) {
+  return (
+    <Button
+      variant={active ? "default" : "outline"}
+      data-testid={`${kind}-button`}
+      disabled={disabled}
+      onClick={() => onToggle(kind)}
+      className={active ? "ring-2 ring-sky-400/60 ring-offset-2 ring-offset-slate-950" : ""}
+    >
+      <Icon className="mr-2 size-4" />
+      {label}
+      <span className="ml-2 font-mono text-[10px] opacity-70">1 AP</span>
+    </Button>
   );
 }
 
@@ -107,9 +156,13 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [self, setSelf] = useState<Player | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<ActionMode | null>(null);
+  const [hover, setHover] = useState<HoverState | null>(null);
+  const credsRef = useRef<Credentials | null>(null);
   const autoJoined = useRef(false);
+  const joinedAtRef = useRef(0);
 
-  // Shared board state — polls so other commanders' drops appear on the map.
+  // Shared board state — polls so other commanders' moves and strikes appear on the map.
   const playersQuery = useQuery({
     queryKey: ["players"],
     queryFn: () => apiGet<Player[]>("/game/players"),
@@ -123,6 +176,9 @@ export default function Home() {
     onSuccess: (player, v) => {
       setSelf(player);
       setError(null);
+      setMode(null);
+      credsRef.current = v.creds;
+      joinedAtRef.current = Date.now();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(v.creds));
       queryClient.invalidateQueries({ queryKey: ["players"] });
       if (v.auto) {
@@ -131,7 +187,7 @@ export default function Home() {
         });
       } else {
         toast.success(`Commander ${player.username} deployed`, {
-          description: `Dropped into sector [${player.x + 1}, ${player.y + 1}]`,
+          description: `Dropped into sector [${player.x + 1}, ${player.y + 1}] · 1 AP granted`,
         });
       }
     },
@@ -142,18 +198,111 @@ export default function Home() {
     },
   });
 
+  const act = useMutation<AttackResult | Player | TransferResult, Error, ActionCall>({
+    mutationFn: (call: ActionCall) => {
+      const creds = credsRef.current;
+      if (!creds) return Promise.reject(new Error("Not deployed"));
+      switch (call.kind) {
+        case "move":
+          return apiPost<Player>("/game/move", { ...creds, x: call.x, y: call.y });
+        case "attack":
+          return apiPost<AttackResult>("/game/attack", {
+            ...creds,
+            target_x: call.x,
+            target_y: call.y,
+          });
+        case "transfer":
+          return apiPost<TransferResult>("/game/transfer", {
+            ...creds,
+            target_x: call.x,
+            target_y: call.y,
+          });
+        case "expand":
+          return apiPost<Player>("/game/expand", creds);
+      }
+    },
+    onSuccess: (result, call) => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["players"] });
+      switch (call.kind) {
+        case "move": {
+          const p = result as Player;
+          setSelf(p);
+          toast.success(`Relocated to [${p.x + 1}, ${p.y + 1}]`);
+          break;
+        }
+        case "attack": {
+          const r = result as AttackResult;
+          setSelf(r.attacker);
+          if (r.eliminated) {
+            toast.success(`Commander ${r.target_username} eliminated!`, {
+              description: "Their callsign is free — they can redeploy with the same code.",
+            });
+          } else if (r.target) {
+            toast.success(`Direct hit on ${r.target.username} — ${r.target.health}/${MAX_HEALTH} HP`);
+          }
+          break;
+        }
+        case "transfer": {
+          const r = result as TransferResult;
+          setSelf(r.source);
+          toast.success(`Transferred 1 AP to ${r.target.username}`, {
+            description: `${r.target.username} now holds ${r.target.ap} AP.`,
+          });
+          break;
+        }
+        case "expand": {
+          const p = result as Player;
+          setSelf(p);
+          toast.success(`Range expanded to ${p.range}`);
+          break;
+        }
+      }
+      setMode(null);
+    },
+    onError: (err) => {
+      toast.error(errorDetail(err, "Action failed — try again shortly"));
+    },
+  });
+
   // Returning from a refresh: silently re-validate stored credentials against the server.
   useEffect(() => {
     if (autoJoined.current) return;
     autoJoined.current = true;
     const creds = loadCredentials();
     if (creds) {
+      credsRef.current = creds;
       joinMutation.mutate(
         { creds, auto: true },
-        { onError: () => localStorage.removeItem(STORAGE_KEY) },
+        { onError: () => {
+            credsRef.current = null;
+            localStorage.removeItem(STORAGE_KEY);
+          } },
       );
     }
   }, [joinMutation.mutate]);
+
+  // If this commander vanishes from the shared board, they were eliminated mid-session.
+  useEffect(() => {
+    if (!self || joinMutation.isPending || !playersQuery.isSuccess) return;
+    // Only judge from a board snapshot taken AFTER this session's join completed —
+    // the first invalidation refetch lags the join response by a beat.
+    if (playersQuery.dataUpdatedAt <= joinedAtRef.current) return;
+    if (players.length > 0 && !players.some((p) => p.id === self.id)) {
+      credsRef.current = null;
+      localStorage.removeItem(STORAGE_KEY);
+      setSelf(null);
+      setMode(null);
+      toast.error("You were eliminated", {
+        description: "Rejoin with the same callsign and access code to redeploy fresh.",
+      });
+    }
+  }, [players, self, playersQuery.isSuccess, joinMutation.isPending, playersQuery.dataUpdatedAt]);
+
+  // An armed mode is pointless once the AP for it is gone.
+  useEffect(() => {
+    if (mode && self && self.ap < 1) setMode(null);
+  }, [mode, self]);
 
   const handleJoin = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -175,7 +324,9 @@ export default function Home() {
 
   const handleLeave = () => {
     localStorage.removeItem(STORAGE_KEY);
+    credsRef.current = null;
     setSelf(null);
+    setMode(null);
     setUsername("");
     setPassword("");
     setError(null);
@@ -185,11 +336,43 @@ export default function Home() {
     });
   };
 
+  const toggleMode = (kind: ActionMode) => setMode((m) => (m === kind ? null : kind));
+
+  const onCellClick = (x: number, y: number) => {
+    if (!mode) return;
+    act.mutate({ kind: mode, x, y });
+  };
+
   const cols = Array.from({ length: BOARD }, (_, i) => i);
   const rows = Array.from({ length: BOARD }, (_, i) => i);
   const track = `repeat(${BOARD}, minmax(0, 1fr))`;
   const occupied = new Map<string, Player>();
   for (const p of players) occupied.set(`${p.y}:${p.x}`, p);
+
+  // Shaded range diamonds: sky for your own, faint rose for rival reach. Occupied cells keep their own look.
+  const rangeShadeFor = (x: number, y: number, p: Player | undefined): string => {
+    if (p) return "";
+    if (self) {
+      const d = manhattan(x, y, self.x, self.y);
+      if (d >= 1 && d <= self.range) return "border-sky-500/25 bg-sky-500/10 hover:border-sky-500/60";
+    }
+    for (const q of players) {
+      if (self && q.id === self.id) continue;
+      if (manhattan(x, y, q.x, q.y) <= q.range) return "border-rose-500/20 bg-rose-500/[0.07] hover:border-rose-500/40";
+    }
+    return "";
+  };
+
+  // While a mode is armed, valid targets get a crosshair ring.
+  const targetRingFor = (x: number, y: number, p: Player | undefined): string => {
+    if (!mode || !self || act.isPending) return "";
+    const d = manhattan(x, y, self.x, self.y);
+    if (d < 1 || d > self.range) return "";
+    if (mode === "move") return p ? "" : "ring-1 ring-emerald-400/70 cursor-crosshair";
+    return p && p.id !== self.id ? "ring-1 ring-rose-400/80 cursor-crosshair" : "";
+  };
+
+  const needsSelf = !self || act.isPending;
 
   return (
     <div className="relative flex min-h-svh flex-col items-center gap-6 bg-background px-4 py-8 text-foreground">
@@ -260,6 +443,27 @@ export default function Home() {
             >
               <Crosshair className="mr-1 size-3" />
               Position [X: {self.x + 1}, Y: {self.y + 1}]
+            </Badge>
+            <Badge
+              variant="secondary"
+              data-testid="ap-display"
+              className="font-mono text-[10px] uppercase tracking-wider"
+            >
+              AP: {self.ap}
+            </Badge>
+            <Badge
+              variant="secondary"
+              data-testid="health-display"
+              className="font-mono text-[10px] uppercase tracking-wider"
+            >
+              HP: {self.health}/{MAX_HEALTH}
+            </Badge>
+            <Badge
+              variant="secondary"
+              data-testid="range-display"
+              className="font-mono text-[10px] uppercase tracking-wider"
+            >
+              Range: {self.range}
             </Badge>
             <Badge className="border border-emerald-500/40 bg-emerald-500/15 font-mono text-[10px] uppercase tracking-wider text-emerald-300">
               Active online
@@ -400,13 +604,29 @@ export default function Home() {
                           ? `Grid cell row ${r + 1} col ${c + 1}, occupied by ${p.username}`
                           : `Grid cell row ${r + 1} col ${c + 1}`
                       }
+                      onClick={() => onCellClick(c, r)}
+                      onMouseEnter={(e) => {
+                        if (p) setHover({ player: p, cx: e.clientX, cy: e.clientY });
+                      }}
+                      onMouseMove={(e) => {
+                        if (p)
+                          setHover((h) =>
+                            h && h.player.id === p.id
+                              ? { ...h, cx: e.clientX, cy: e.clientY }
+                              : { player: p, cx: e.clientX, cy: e.clientY },
+                          );
+                      }}
+                      onMouseLeave={() => {
+                        if (p) setHover((h) => (h && h.player.id === p.id ? null : h));
+                      }}
                       className={`relative flex aspect-square items-center justify-center rounded-[3px] border transition-colors duration-150 ${
                         p
                           ? isSelf
                             ? "border-emerald-500/70 bg-emerald-950/60"
                             : "border-blue-700/40 bg-[#172554]/70"
-                          : "border-slate-800/80 bg-[#0F172A] hover:border-sky-500/60 hover:bg-slate-800/90"
-                      }`}
+                          : rangeShadeFor(c, r, p) ||
+                            "border-slate-800/80 bg-[#0F172A] hover:border-sky-500/60 hover:bg-slate-800/90"
+                      } ${targetRingFor(c, r, p)}`}
                     >
                       {p && <AvatarToken player={p} isSelf={isSelf} />}
                     </div>
@@ -418,9 +638,62 @@ export default function Home() {
         </div>
       </section>
 
-      <p className="pb-2 text-center font-mono text-[11px] uppercase tracking-[0.25em] text-slate-600">
-        Milestone 1 — the map is live. Orders will follow.
-      </p>
+      {/* Action bar — below the grid */}
+      <div className="flex w-full max-w-4xl flex-col items-center gap-2">
+        <div className="flex flex-wrap items-center justify-center gap-2" data-testid="action-bar">
+          <ActionButton
+            kind="attack"
+            active={mode === "attack"}
+            icon={Swords}
+            label="Attack"
+            disabled={needsSelf || self.ap < 1}
+            onToggle={toggleMode}
+          />
+          <ActionButton
+            kind="move"
+            active={mode === "move"}
+            icon={Footprints}
+            label="Move"
+            disabled={needsSelf || self.ap < 1}
+            onToggle={toggleMode}
+          />
+          <ActionButton
+            kind="transfer"
+            active={mode === "transfer"}
+            icon={ArrowLeftRight}
+            label="Transfer"
+            disabled={needsSelf || self.ap < 1}
+            onToggle={toggleMode}
+          />
+          <Button
+            variant="outline"
+            data-testid="expand-button"
+            disabled={needsSelf || self.ap < 1 || self.range >= MAX_RANGE}
+            onClick={() => act.mutate({ kind: "expand" })}
+          >
+            <Maximize2 className="mr-2 size-4" />
+            Expand
+            <span className="ml-2 font-mono text-[10px] opacity-70">1 AP</span>
+          </Button>
+        </div>
+        {mode ? (
+          <p
+            data-testid="action-hint"
+            className="text-center font-mono text-[11px] uppercase tracking-[0.25em] text-sky-300"
+          >
+            {ACTION_HINTS[mode]} — click the button again to cancel
+          </p>
+        ) : (
+          <p
+            data-testid="ap-rule-hint"
+            className="text-center font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500"
+          >
+            Deploy with 1 AP · +1 AP daily at 18:00 server time
+          </p>
+        )}
+      </div>
+
+      {hover && <CellIntelCard player={hover.player} cx={hover.cx} cy={hover.cy} />}
     </div>
   );
 }

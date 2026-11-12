@@ -22,6 +22,7 @@ INDEXES: dict[str, list[IndexModel]] = {
     "players": [
         IndexModel([("username_key", ASCENDING)], name="username_key_unique", unique=True),
         IndexModel([("created_at", ASCENDING)], name="created_at_asc"),
+        IndexModel([("x", ASCENDING), ("y", ASCENDING)], name="xy"),
     ],
 }
 

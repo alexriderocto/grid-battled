@@ -1,0 +1,198 @@
+{
+  "project_title": "15x15 Strategy Map - Multiplayer Grid War Room",
+  "archetype": "THE PERFORMANCE PRO / TACTICAL WAR-ROOM MINIMALISM",
+  "theme_mode": "dark",
+  "typography": {
+    "pairing": "Space Grotesk (Headings/Display) + JetBrains Mono (Coordinates/Data/Badges/Tokens) + DM Sans (Body/Labels)",
+    "installed_fonts": [
+      "@fontsource-variable/space-grotesk",
+      "@fontsource-variable/jetbrains-mono",
+      "@fontsource-variable/dm-sans"
+    ],
+    "scale_px": {
+      "display": 48,
+      "h1": 36,
+      "h2": 28,
+      "h3": 20,
+      "body": 16,
+      "caption": 14
+    },
+    "rules": {
+      "headings": "font-heading font-bold tracking-tight text-slate-100",
+      "data_coords": "font-mono font-medium tracking-wider text-xs uppercase",
+      "body": "font-sans font-normal leading-relaxed text-slate-300",
+      "captions": "font-sans text-sm text-slate-400"
+    }
+  },
+  "colors": {
+    "surfaces": [
+      {
+        "name": "page",
+        "kind": "solid",
+        "bg": "#0B0F17",
+        "on_bg": "#F8FAFC",
+        "on_bg_muted": "#94A3B8",
+        "roles": {
+          "grid_border": "#1E293B",
+          "link": "#38BDF8",
+          "error": "#F87171",
+          "success": "#34D399"
+        }
+      },
+      {
+        "name": "panel",
+        "kind": "solid",
+        "bg": "#111827",
+        "on_bg": "#F9FAFB",
+        "on_bg_muted": "#9CA3AF",
+        "roles": {
+          "border": "#1F2937",
+          "hover_border": "#374151",
+          "active_ring": "#38BDF8"
+        }
+      },
+      {
+        "name": "grid_cell_default",
+        "kind": "solid",
+        "bg": "#0F172A",
+        "on_bg": "#94A3B8",
+        "on_bg_muted": "#64748B",
+        "roles": {
+          "border": "#1E293B",
+          "hover_bg": "#1E293B",
+          "hover_border": "#38BDF8"
+        }
+      },
+      {
+        "name": "grid_cell_occupied",
+        "kind": "solid",
+        "bg": "#172554",
+        "on_bg": "#E0F2FE",
+        "on_bg_muted": "#BAE6FD",
+        "roles": {
+          "border": "#2563EB"
+        }
+      },
+      {
+        "name": "grid_cell_self",
+        "kind": "solid",
+        "bg": "#064E3B",
+        "on_bg": "#ECFDF5",
+        "on_bg_muted": "#A7F3D0",
+        "roles": {
+          "border": "#10B981",
+          "radar_ring": "#34D399"
+        }
+      },
+      {
+        "name": "card_active_session",
+        "kind": "solid",
+        "bg": "#1E293B",
+        "on_bg": "#F8FAFC",
+        "on_bg_muted": "#CBD5E1"
+      },
+      {
+        "name": "badge_tag",
+        "kind": "solid",
+        "bg": "#1E293B",
+        "on_bg": "#38BDF8",
+        "on_bg_muted": "#94A3B8"
+      }
+    ],
+    "accent": "#0284C7",
+    "on_accent": "#FFFFFF",
+    "tokens_palette": [
+      { "color_name": "Emerald Blaze (You/Default)", "bg": "#10B981", "text": "#FFFFFF", "border": "#34D399", "glow": "rgba(16, 185, 129, 0.4)" },
+      { "color_name": "Amber Strike", "bg": "#D97706", "text": "#FFFFFF", "border": "#FBBF24", "glow": "rgba(217, 119, 6, 0.4)" },
+      { "color_name": "Cyan Vanguard", "bg": "#0284C7", "text": "#FFFFFF", "border": "#38BDF8", "glow": "rgba(2, 132, 199, 0.4)" },
+      { "color_name": "Rose Sentinel", "bg": "#E11D48", "text": "#FFFFFF", "border": "#FB7185", "glow": "rgba(225, 29, 72, 0.4)" },
+      { "color_name": "Violet Command", "bg": "#7C3AED", "text": "#FFFFFF", "border": "#A78BFA", "glow": "rgba(124, 58, 237, 0.4)" },
+      { "color_name": "Indigo Scout", "bg": "#4F46E5", "text": "#FFFFFF", "border": "#818CF8", "glow": "rgba(79, 70, 229, 0.4)" },
+      { "color_name": "Fuchsia Tactician", "bg": "#C026D3", "text": "#FFFFFF", "border": "#E879F9", "glow": "rgba(192, 38, 211, 0.4)" },
+      { "color_name": "Teal Operative", "bg": "#0D9488", "text": "#FFFFFF", "border": "#2DD4BF", "glow": "rgba(13, 148, 136, 0.4)" }
+    ]
+  },
+  "entry_surfaces": {
+    "/": "tactical war-room map console — top persistent command header with status badge, join/auth & session cockpit panel above the central 15x15 tactical grid with coordinate axis indicators"
+  },
+  "layout_and_grid_specifications": {
+    "overall_container": "max-w-7xl mx-auto px-4 py-8 flex flex-col items-center gap-6",
+    "top_command_header": {
+      "description": "Tactical status bar with logo, game title 'TERRA GRID 15×15', active player count badge, and tactical telemetry indicator",
+      "style": "w-full max-w-4xl flex items-center justify-between border-b border-slate-800 pb-4 mb-2"
+    },
+    "join_panel": {
+      "location": "DIRECTLY ABOVE the 15x15 map grid",
+      "states": {
+        "logged_out": "Tactical Join / Rejoin card with Username Input, 6-digit Password Input (numeric or text), Join/Deploy Button, and contextual helper text / error display",
+        "logged_in": "Active Commander Session banner showing current avatar preview, username, assigned coordinates (e.g., [X: 8, Y: 12]), assigned token color swatch, and a prominent 'Leave Game / Terminate Session' button"
+      },
+      "style": "w-full max-w-4xl bg-slate-900/90 border border-slate-800 rounded-xl p-6 shadow-xl backdrop-blur-md"
+    },
+    "map_grid_15x15": {
+      "dimensions": "15 rows by 15 columns (total 225 cells)",
+      "container_layout": "relative bg-slate-950/80 border-2 border-slate-800 rounded-xl p-3 md:p-6 shadow-2xl overflow-hidden",
+      "coordinate_labels": {
+        "top_x_axis": "15 columns labeled 1 through 15 (or A through O) in font-mono text-[10px] text-slate-500 flex justify-around mb-2",
+        "left_y_axis": "15 rows labeled 1 through 15 in font-mono text-[10px] text-slate-500 flex flex-col justify-around mr-2"
+      },
+      "grid_css": "grid grid-cols-15 gap-[2px] md:gap-1 bg-slate-800/60 p-1 rounded-lg aspect-square max-w-[620px] w-full mx-auto",
+      "cell_style": "aspect-square relative rounded-[3px] bg-slate-900 border border-slate-800/80 hover:border-sky-500/60 hover:bg-slate-800/90 transition-all flex items-center justify-center cursor-pointer select-none group",
+      "avatar_token": {
+        "design": "Circular or rounded-hexagonal high-contrast military tactical token with first letter of username capitalized in bold monospace",
+        "size": "w-3/4 h-3/4 max-w-[32px] max-h-[32px] rounded-full flex items-center justify-center font-mono font-bold text-xs shadow-md border",
+        "self_highlight": "Pulsing radar ring or bright border (e.g., emerald or gold ring with ring-2 ring-emerald-400 ring-offset-1 ring-offset-slate-900 animate-pulse), with distinct 'YOU' mini-indicator or tooltip",
+        "others_token": "Solid token colored deterministically from user identifier / assigned palette, crisp white initials, subtle border",
+        "tooltip": "On hover, show mini tooltip with Commander Username and Coordinates e.g. 'Alpha [7, 12]'"
+      }
+    }
+  },
+  "motion_and_micro_interactions": {
+    "token_spawn": "Scale-in from 0 to 1 with spring physics (motion/react: initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 20 }})",
+    "self_radar_pulse": "Subtle repeating sonar/radar sweep border animation for the player's own token to instantly distinguish location on the 225-cell grid",
+    "cell_hover": "Border glow transitioning to sky-400 (transition: border-color 0.15s ease, background-color 0.15s ease)",
+    "error_shake": "Gentle horizontal shake when wrong password entered for existing commander (transform: translateX(-4px) -> translateX(4px))",
+    "leave_game": "Smooth fade-out and reset form inputs back to ready state"
+  },
+  "accessibility_and_contrast": {
+    "text_contrast": "All text elements exceed APCA / WCAG AA 4.5:1 against their dark slate backgrounds (Slate-100 #F8FAFC on Slate-900 #0F172A is 14.5:1; Slate-400 #94A3B8 is 6.2:1)",
+    "token_contrast": "Initials on tokens use pure white #FFFFFF with drop-shadow or pure black #000000 depending on token luminosity, ensuring AA contrast ratio",
+    "focus_states": "Visible focus ring with focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:outline-none on all inputs and buttons",
+    "screen_readers": "Grid cells have aria-label='Grid cell row {r} col {c}' and if occupied, 'Occupied by {username}'",
+    "reduced_motion": "Wrap pulse and spawn animations in motion-safe queries (@media (prefers-reduced-motion: reduce))"
+  },
+  "shadcn_component_usage": {
+    "Button": "@/components/ui/button.tsx — used for 'Deploy / Join Map', 'Leave Game', 'Toggle Coordinates', 'Quick Info'",
+    "Input": "@/components/ui/input.tsx — used for Username and 6-digit Password (with inputMode='numeric' or text, maxLength=6)",
+    "Card": "@/components/ui/card.tsx — customized with dark war-room border for Join Panel and Active Commander info",
+    "Badge": "@/components/ui/badge.tsx — used for status chips ('ACTIVE ONLINE', 'SECTOR 15x15', 'COORDINATES')",
+    "Toaster": "@/components/ui/sonner.tsx — used for deployment alerts, wrong password notifications, and rejoining feedback"
+  },
+  "data_test_ids": {
+    "join_panel": "join-panel",
+    "username_input": "username-input",
+    "password_input": "password-input",
+    "join_button": "join-button",
+    "leave_button": "leave-button",
+    "active_commander_banner": "active-commander-banner",
+    "active_username_display": "active-username-display",
+    "active_coords_display": "active-coords-display",
+    "error_message": "error-message",
+    "game_grid": "game-grid-15x15",
+    "grid_cell": "grid-cell-${row}-${col}",
+    "player_avatar": "player-avatar-${username}",
+    "self_avatar_highlight": "self-avatar-highlight"
+  },
+  "instructions_to_main_agent": [
+    "Template is farm-ts (FastAPI backend at /app/backend, Vite + React 19 frontend at /app/frontend).",
+    "Set dark theme as primary for this strategy war-room aesthetic by ensuring dark mode class in index.html and index.css.",
+    "Implement the 15x15 square grid cleanly using Tailwind CSS grid (grid-cols-15 or custom 15 column CSS grid template).",
+    "Maintain state in FastAPI with MongoDB (or in-memory cache synchronized with MongoDB) for players: username, 6-digit password hash or verification, assigned (x, y) coordinates (1-15, 1-15), token color index, created_at, last_active.",
+    "When a new user joins, pick an empty random square (or random square on the 15x15 board) and assign a distinct token color from the palette.",
+    "When an existing user rejoins with the correct password, return their existing position and token color.",
+    "When an existing user provides the WRONG password, reject with 401 error message 'Invalid password for commander [username]'.",
+    "Ensure your own avatar is highlighted distinctly with the emerald pulse ring and 'YOU' indicator.",
+    "Leave Game button clears the client's active session, but their token remains on the shared map until refreshed or per persistence specs.",
+    "Scope Guard: Strictly maintain milestone boundary — do NOT add movement controls, attack mechanics, chat, or complex game loops. Keep it focused on the 15x15 map, join/rejoin auth, and multi-avatar rendering."
+  ]
+}

@@ -19,6 +19,7 @@ from passlib.context import CryptContext
 from pymongo.errors import DuplicateKeyError
 
 from lib.db import db
+from lib.name_filter import REJECTION, is_offensive
 from models.game import (
     BASE_RANGE,
     CHAT_HISTORY,
@@ -36,6 +37,8 @@ from models.game import (
     DMThreadRequest,
     JoinRequest,
     MoveRequest,
+    NameCheckRequest,
+    NameCheckResponse,
     Player,
     TargetRequest,
     TransferResponse,
@@ -238,11 +241,21 @@ async def state():
     return BoardSnapshot(players=players, chat=[to_message(d) for d in reversed(chat_docs)])
 
 
+@router.post("/name-check", response_model=NameCheckResponse)
+async def name_check(req: NameCheckRequest):
+    """Lets the join form reject a bad callsign before the class picker; /join enforces it again."""
+    if is_offensive(req.username.strip()):
+        return NameCheckResponse(allowed=False, detail=REJECTION)
+    return NameCheckResponse(allowed=True)
+
+
 @router.post("/join", response_model=Player)
 async def join(req: JoinRequest):
     username = req.username.strip()
     if not username:
         raise HTTPException(status_code=422, detail="Username cannot be empty")
+    if is_offensive(username):  # blocks new profiles AND sign-ins to any existing offensive callsign
+        raise HTTPException(status_code=400, detail=REJECTION)
     username_key = username.lower()
     now = utc_now()
 

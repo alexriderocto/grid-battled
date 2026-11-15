@@ -42,6 +42,16 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
 - **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
   `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
 
+## Callsign filter (milestone 6)
+- `backend/lib/name_filter.py` `is_offensive()` blocks swearing + racial/hate slurs. Normalises case, accents,
+  leetspeak (0/1/3/4/5/7/@/$…), separators, stretched letters (3+ repeats). Two tiers: SUBSTRING_TERMS
+  blocked anywhere; TOKEN_TERMS (short words like dick/paki/spic/ass) only as a whole word-part
+  (split on camelCase/digits/separators) so Dickens, Pakistan, Spicy, Cassandra, Therapist pass.
+  Known accepted trade-off: "Scunthorpe" is blocked (contains a slur substring).
+- `POST /api/game/name-check {username}` -> `{allowed, detail}` — join form calls it for NEW callsigns
+  before the class picker. `POST /api/game/join` enforces it again (400 + REJECTION message) for both
+  new profiles and sign-ins to existing callsigns. Chat/DM text is NOT filtered (not requested).
+
 ## Classes (milestone 5) — chosen once, when a NEW profile is created
 - Flow: enter callsign + code -> Join. If the callsign is on the board (case-insensitive) it's a straight
   rejoin (class locked). Otherwise the ClassPicker replaces the join panel: pick Standard or Alliance

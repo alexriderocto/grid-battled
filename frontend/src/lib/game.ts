@@ -107,3 +107,9 @@ export const CLASS_INFO: Record<PlayerClass, { label: string; tagline: string; p
     ],
   },
 };
+
+// Mirror of backend/models/game.py::NameCheckResponse.
+export interface NameCheckResult {
+  allowed: boolean;
+  detail: string | null;
+}

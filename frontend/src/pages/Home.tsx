@@ -28,6 +28,7 @@ import type {
   ChatMessage,
   UnreadCounts,
   PlayerClass,
+  NameCheckResult,
 } from "@/lib/game";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -431,12 +432,26 @@ export default function Home() {
     if (players.some((p) => p.username.toLowerCase() === name.toLowerCase())) {
       joinMutation.mutate({ creds, auto: false });
     } else {
+      nameCheck.mutate(creds);
+    }
+  };
+
+  // New callsign: screen it for swearing/slurs before showing the class picker.
+  const nameCheck = useMutation({
+    mutationFn: (creds: Credentials) =>
+      apiPost<NameCheckResult>("/game/name-check", { username: creds.username }),
+    onSuccess: (res, creds) => {
+      if (!res.allowed) {
+        setError(res.detail ?? "That callsign isn't allowed — please choose another");
+        return;
+      }
       setError(null);
       setNewProfile(creds);
       setPickedClass(null);
       setSpawn(null);
-    }
-  };
+    },
+    onError: (err) => setError(errorDetail(err, "Cannot reach command — try again shortly")),
+  });
 
   const deployNewProfile = () => {
     if (!newProfile || !pickedClass) return;
@@ -714,8 +729,8 @@ export default function Home() {
                   className="border-slate-700 bg-slate-950/60 font-mono tracking-[0.4em]"
                 />
               </div>
-              <Button type="submit" data-testid="join-button" disabled={joinMutation.isPending}>
-                {joinMutation.isPending ? "Deploying…" : "Join map"}
+              <Button type="submit" data-testid="join-button" disabled={joinMutation.isPending || nameCheck.isPending}>
+                {joinMutation.isPending || nameCheck.isPending ? "Checking…" : "Join map"}
               </Button>
             </form>
             {error && (

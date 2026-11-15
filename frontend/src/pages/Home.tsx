@@ -1,3 +1,4 @@
+import { formatDistanceToNow } from "date-fns";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -6,6 +7,7 @@ import {
   ArrowLeftRight,
   Crosshair,
   Footprints,
+  HeartPulse,
   Maximize2,
   Swords,
   Users,
@@ -54,19 +56,29 @@ import AdminConsole from "@/components/game/AdminConsole";
 const BOARD = 15;
 const STORAGE_KEY = "terra-grid-commander";
 
-type ActionMode = "attack" | "move" | "transfer";
+type ActionMode = "attack" | "move" | "transfer" | "heal";
 
 type ActionCall =
   | { kind: "attack"; x: number; y: number }
   | { kind: "move"; x: number; y: number }
   | { kind: "transfer"; x: number; y: number }
+  | { kind: "heal"; x: number; y: number }
   | { kind: "expand" };
 
 const ACTION_HINTS: Record<ActionMode, string> = {
   attack: "Select a commander in range to strike — deals 1 damage · 1 AP",
   move: "Select an empty square in range to relocate · 1 AP",
   transfer: "Select a commander in range to gift 1 of your AP",
+  heal: "Select another commander in range to restore 1 HP · free, once per 2-day period",
 };
+
+function hintFor(mode: ActionMode, self: Player | null): string {
+  if (mode === "attack" && self?.player_class === "murderer")
+    return "Select a commander in range to strike — Murderer: deals 2 damage · 1 AP";
+  if (mode === "move" && self?.player_class === "sprinter")
+    return `Select an empty square within ${self.range * 2} (Sprinter double range) · 1 AP`;
+  return ACTION_HINTS[mode];
+}
 
 interface HoverState {
   player: Player;
@@ -140,6 +152,7 @@ function ActionButton({
   label,
   disabled,
   onToggle,
+  cost = "1 AP",
 }: {
   kind: ActionMode;
   active: boolean;
@@ -147,6 +160,7 @@ function ActionButton({
   label: string;
   disabled: boolean;
   onToggle: (kind: ActionMode) => void;
+  cost?: string;
 }) {
   return (
     <Button
@@ -158,7 +172,7 @@ function ActionButton({
     >
       <Icon className="mr-2 size-4" />
       {label}
-      <span className="ml-2 font-mono text-[10px] opacity-70">1 AP</span>
+      <span className="ml-2 font-mono text-[10px] opacity-70">{cost}</span>
     </Button>
   );
 }
@@ -304,7 +318,7 @@ export default function Home() {
         });
       } else if (v.create) {
         toast.success(`Commander ${player.username} deployed`, {
-          description: `Dropped into sector [${player.x + 1}, ${player.y + 1}] · 1 AP granted`,
+          description: `Dropped into sector [${player.x + 1}, ${player.y + 1}] · ${CLASS_INFO[player.player_class].label} · ${player.ap} AP`,
         });
       } else {
         toast.success(`Welcome back, ${player.username}`, {
@@ -339,6 +353,8 @@ export default function Home() {
             target_x: call.x,
             target_y: call.y,
           });
+        case "heal":
+          return apiPost<TransferResult>("/game/heal", { ...creds, target_x: call.x, target_y: call.y });
         case "expand":
           return apiPost<Player>("/game/expand", creds);
       }
@@ -371,6 +387,12 @@ export default function Home() {
           toast.success(`Transferred 1 AP to ${r.target.username}`, {
             description: `${r.target.username} now holds ${r.target.ap} AP.`,
           });
+          break;
+        }
+        case "heal": {
+          const r = result as TransferResult;
+          setSelf(r.source);
+          toast.success(`Healed ${r.target.username} — ${r.target.health}/${MAX_HEALTH} HP`);
           break;
         }
         case "expand": {
@@ -423,7 +445,7 @@ export default function Home() {
 
   // An armed mode is pointless once the AP for it is gone.
   useEffect(() => {
-    if (mode && self && self.ap < 1) setMode(null);
+    if (mode && mode !== "heal" && self && self.ap < 1) setMode(null);
   }, [mode, self]);
 
   const handleJoin = (event: FormEvent<HTMLFormElement>) => {
@@ -504,7 +526,7 @@ export default function Home() {
         create: { player_class: "alliance", spawn_x: spawn.x, spawn_y: spawn.y },
       });
     } else {
-      joinMutation.mutate({ creds: newProfile, auto: false, create: { player_class: "standard" } });
+      joinMutation.mutate({ creds: newProfile, auto: false, create: { player_class: pickedClass } });
     }
   };
 
@@ -576,8 +598,10 @@ export default function Home() {
   const targetRingFor = (x: number, y: number, p: Player | undefined): string => {
     if (!mode || !self || act.isPending) return "";
     const d = manhattan(x, y, self.x, self.y);
-    if (d < 1 || d > self.range) return "";
+    const reach = mode === "move" && self.player_class === "sprinter" ? self.range * 2 : self.range;
+    if (d < 1 || d > reach) return "";
     if (mode === "move") return p ? "" : "ring-1 ring-emerald-400/70 cursor-crosshair";
+    if (mode === "heal") return p && p.id !== self.id ? "ring-1 ring-pink-400/80 cursor-crosshair" : "";
     return p && p.id !== self.id ? "ring-1 ring-rose-400/80 cursor-crosshair" : "";
   };
 
@@ -713,6 +737,32 @@ export default function Home() {
             >
               Class: {CLASS_INFO[self.player_class ?? "standard"].label}
             </Badge>
+            {self.player_class === "sprinter" && (
+              <Badge
+                data-testid="sprinter-status"
+                className={`border font-mono text-[10px] uppercase tracking-wider ${
+                  self.immovable
+                    ? "border-red-500/40 bg-red-500/15 text-red-300"
+                    : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                }`}
+              >
+                {self.immovable ? "Rest day — immovable" : `Move reach ${self.range * 2}`}
+              </Badge>
+            )}
+            {self.player_class === "healer" && self.heal_deadline && (
+              <Badge
+                data-testid="healer-status"
+                className={`border font-mono text-[10px] uppercase tracking-wider ${
+                  self.heal_available
+                    ? "border-pink-500/40 bg-pink-500/15 text-pink-300"
+                    : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                }`}
+              >
+                {self.heal_available
+                  ? `Heal due ${formatDistanceToNow(new Date(self.heal_deadline), { addSuffix: true })}`
+                  : `Healed ✓ · next ${formatDistanceToNow(new Date(self.heal_deadline), { addSuffix: true })}`}
+              </Badge>
+            )}
             <Badge className="border border-emerald-500/40 bg-emerald-500/15 font-mono text-[10px] uppercase tracking-wider text-emerald-300">
               Active online
             </Badge>
@@ -942,7 +992,7 @@ export default function Home() {
             active={mode === "attack"}
             icon={Swords}
             label="Attack"
-            disabled={needsSelf || self.ap < 1}
+            disabled={needsSelf || self.ap < 1 || self.player_class === "ap_mine"}
             onToggle={toggleMode}
           />
           <ActionButton
@@ -950,7 +1000,7 @@ export default function Home() {
             active={mode === "move"}
             icon={Footprints}
             label="Move"
-            disabled={needsSelf || self.ap < 1}
+            disabled={needsSelf || self.ap < 1 || self.immovable}
             onToggle={toggleMode}
           />
           <ActionButton
@@ -961,10 +1011,21 @@ export default function Home() {
             disabled={needsSelf || self.ap < 1}
             onToggle={toggleMode}
           />
+          {self?.player_class === "healer" && (
+            <ActionButton
+              kind="heal"
+              active={mode === "heal"}
+              icon={HeartPulse}
+              label="Heal"
+              cost="free"
+              disabled={needsSelf || !self.heal_available}
+              onToggle={toggleMode}
+            />
+          )}
           <Button
             variant="outline"
             data-testid="expand-button"
-            disabled={needsSelf || self.ap < 1 || self.range >= MAX_RANGE}
+            disabled={needsSelf || self.ap < 1 || self.range >= MAX_RANGE || self.player_class === "ap_mine"}
             onClick={() => act.mutate({ kind: "expand" })}
           >
             <Maximize2 className="mr-2 size-4" />
@@ -992,14 +1053,14 @@ export default function Home() {
             data-testid="action-hint"
             className="text-center font-mono text-[11px] uppercase tracking-[0.25em] text-sky-300"
           >
-            {ACTION_HINTS[mode]} — click the button again to cancel
+            {hintFor(mode, self)} — click the button again to cancel
           </p>
         ) : (
           <p
             data-testid="ap-rule-hint"
             className="text-center font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500"
           >
-            Standard deploys with 1 AP · Alliance skips the first two · +1 AP daily at 6pm UK time
+            AP top-up daily at 6pm UK time · AP Mine +2 · Murderer none · Alliance skips the first two
           </p>
         )}
       </div>

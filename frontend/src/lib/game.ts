@@ -19,6 +19,9 @@ export interface Player {
   last_active: string;
   last_moved: string;
   player_class: PlayerClass;
+  immovable: boolean; // sprinter rest day (every 3rd day since deploy)
+  heal_available: boolean; // healer hasn't healed in the current 2-day period
+  heal_deadline: string | null; // healer: end of the current period (miss it = -1 HP)
   online: boolean; // true while the commander has a visible browser tab open on the game
 }
 
@@ -96,7 +99,7 @@ export interface UnreadCounts {
 }
 
 // Mirror of backend/models/game.py::PlayerClass — picked once, when a profile is created.
-export type PlayerClass = "standard" | "alliance";
+export type PlayerClass = "standard" | "alliance" | "ap_mine" | "sprinter" | "murderer" | "healer";
 
 export const CLASS_INFO: Record<PlayerClass, { label: string; tagline: string; perks: string[] }> = {
   standard: {
@@ -111,6 +114,30 @@ export const CLASS_INFO: Record<PlayerClass, { label: string; tagline: string; p
       "You pick your spawn square",
       "No AP when you deploy",
       "First 6pm top-up skipped — AP starts at the second",
+    ],
+  },
+  ap_mine: {
+    label: "AP Mine",
+    tagline: "Double AP — but no fighting",
+    perks: ["2 AP when you deploy", "+2 AP every day at 6pm UK time", "Cannot Attack or Expand"],
+  },
+  sprinter: {
+    label: "Sprinter",
+    tagline: "Double move range, regular rest",
+    perks: ["Move up to double your range", "Attack/Transfer use normal range", "Every 3rd day you're immovable"],
+  },
+  murderer: {
+    label: "Murderer",
+    tagline: "Double damage, no resupply",
+    perks: ["Attacks deal 2 damage", "1 AP when you deploy", "Never receive AP again — no 6pm, no transfers"],
+  },
+  healer: {
+    label: "Healer",
+    tagline: "Mend allies — or suffer",
+    perks: [
+      "Free Heal: +1 HP to someone in range",
+      "One heal per 2-day period",
+      "Miss a period's heal and take 1 damage",
     ],
   },
 };

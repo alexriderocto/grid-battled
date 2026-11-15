@@ -1,11 +1,18 @@
-import { Check, MapPin, Shield, Shuffle } from "lucide-react";
+import { Check, HeartPulse, MapPin, Pickaxe, Shield, Shuffle, Skull, Wind } from "lucide-react";
 import { CLASS_INFO } from "@/lib/game";
 import type { PlayerClass } from "@/lib/game";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-const ICONS: Record<PlayerClass, typeof Shield> = { standard: Shuffle, alliance: Shield };
-const ORDER: PlayerClass[] = ["standard", "alliance"];
+const ICONS: Record<PlayerClass, typeof Shield> = {
+  standard: Shuffle,
+  alliance: Shield,
+  ap_mine: Pickaxe,
+  sprinter: Wind,
+  murderer: Skull,
+  healer: HeartPulse,
+};
+const ORDER: PlayerClass[] = ["standard", "alliance", "ap_mine", "sprinter", "murderer", "healer"];
 
 /** Second step of creating a profile: pick a class (and, for Alliance, a spawn square on the map). */
 export default function ClassPicker({
@@ -41,7 +48,7 @@ export default function ClassPicker({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {ORDER.map((c) => {
             const info = CLASS_INFO[c];
             const Icon = ICONS[c];

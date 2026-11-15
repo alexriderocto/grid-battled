@@ -27,6 +27,8 @@ from models.game import (
     MAX_RANGE,
     TOKEN_COLORS,
     ALLIANCE_SKIPPED_GRANTS,
+    HEALER_PERIOD_HOURS,
+    SPRINTER_REST_EVERY_DAYS,
     ADMIN_USERNAME,
     ActionRequest,
     AttackResponse,
@@ -103,16 +105,62 @@ def due_boundaries(after: datetime, now: datetime, tz: ZoneInfo) -> list[datetim
     return grants
 
 
+def aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def sprinter_resting(d: dict, now: datetime) -> bool:
+    """Days 3, 6, 9… since deploying (24h days from created_at) are rest days."""
+    day = int((now - aware(d["created_at"])).total_seconds() // 86400)  # 0-based
+    return (day + 1) % SPRINTER_REST_EVERY_DAYS == 0
+
+
+def heal_period(d: dict, now: datetime) -> int:
+    return int((now - aware(d["created_at"])).total_seconds() // (HEALER_PERIOD_HOURS * 3600))
+
+
+def heal_deadline(d: dict, now: datetime) -> datetime:
+    return aware(d["created_at"]) + timedelta(hours=HEALER_PERIOD_HOURS * (heal_period(d, now) + 1))
+
+
+AP_PER_GRANT = {"ap_mine": 2, "murderer": 0}  # everyone else: 1
+NEGLECTED = "You were eliminated for neglecting your healing duty — join again to redeploy"
+
+
+def alive(d: dict) -> dict:
+    """Raise if accrue() just eliminated this commander (healer neglect); announce it to everyone."""
+    if d.get("_eliminated"):
+        asyncio.get_running_loop().create_task(broadcast())
+        raise HTTPException(status_code=410, detail=NEGLECTED)
+    return d
+
+
 async def accrue(doc: dict) -> dict:
-    """Grant any due APs to one commander and persist the updated tally."""
+    """Bring one commander up to date: grant due APs (class-aware) and apply healer neglect damage.
+    A healer who drops to 0 HP is removed and returned with `_eliminated` set."""
     d = normalize(doc)
+    now = utc_now()
+    if d["player_class"] == "healer":
+        current = heal_period(d, now)
+        checked = d.get("heal_checked", 0)
+        if current > checked:
+            missed = sum(1 for p in range(checked, current) if d.get("heal_period_done") != p)
+            d["heal_checked"] = current
+            d["health"] = max(0, d["health"] - missed)
+            if d["health"] <= 0:
+                await db.players.delete_one({"id": d["id"]})
+                d["_eliminated"] = True
+                return d
+            await db.players.update_one(
+                {"id": d["id"]}, {"$set": {"health": d["health"], "heal_checked": current}}
+            )
     ap_as_of = d["ap_as_of"]
     if ap_as_of.tzinfo is None:  # motor hands back naive datetimes
         ap_as_of = ap_as_of.replace(tzinfo=timezone.utc)
-    grants = due_boundaries(ap_as_of, utc_now(), app_tz())
+    grants = due_boundaries(ap_as_of, now, app_tz())
     if grants:
         skipped = min(len(grants), d["ap_skip"])  # alliance: withhold the early grants
-        d["ap"] += len(grants) - skipped
+        d["ap"] += (len(grants) - skipped) * AP_PER_GRANT.get(d["player_class"], 1)
         d["ap_skip"] -= skipped
         d["ap_as_of"] = grants[-1]
         await db.players.update_one(
@@ -138,6 +186,9 @@ def to_player(doc: dict) -> Player:
         last_active=d["last_active"].replace(tzinfo=timezone.utc),
         last_moved=d["last_moved"].replace(tzinfo=timezone.utc),
         player_class=d["player_class"],
+        immovable=d["player_class"] == "sprinter" and sprinter_resting(d, utc_now()),
+        heal_available=d["player_class"] == "healer" and d.get("heal_period_done") != heal_period(d, utc_now()),
+        heal_deadline=heal_deadline(d, utc_now()) if d["player_class"] == "healer" else None,
         online=PRESENCE.get(d["id"], 0) > 0,
     )
 
@@ -171,7 +222,9 @@ async def build_snapshot() -> str:
     docs = await db.players.find().sort("created_at", 1).to_list(BOARD * BOARD)
     players = []
     for raw in docs:
-        players.append(to_player(await accrue(raw)).model_dump(mode="json"))
+        d = await accrue(raw)
+        if not d.get("_eliminated"):
+            players.append(to_player(d).model_dump(mode="json"))
     chat_docs = await db.messages.find().sort("created_at", -1).to_list(CHAT_HISTORY)
     chat = [to_message(d).model_dump(mode="json") for d in reversed(chat_docs)]
     settings = (await get_settings()).model_dump()
@@ -254,7 +307,7 @@ async def stream(request: Request, player_id: str | None = None):
 @router.get("/state", response_model=BoardSnapshot)
 async def state():
     docs = await db.players.find().sort("created_at", 1).to_list(BOARD * BOARD)
-    players = [to_player(await accrue(d)) for d in docs]
+    players = [to_player(a) for a in [await accrue(d) for d in docs] if not a.get("_eliminated")]
     chat_docs = await db.messages.find().sort("created_at", -1).to_list(CHAT_HISTORY)
     return BoardSnapshot(
         players=players, chat=[to_message(d) for d in reversed(chat_docs)], settings=await get_settings()
@@ -295,7 +348,7 @@ async def join(req: JoinRequest):
     if existing:
         if not pwd_context.verify(req.password, existing["password_hash"]):
             raise HTTPException(status_code=401, detail=f"Invalid password for commander {username}")
-        existing = await accrue(existing)
+        existing = alive(await accrue(existing))
         await db.players.update_one({"id": existing["id"]}, {"$set": {"last_active": now}})
         await broadcast()
         return to_player({**existing, "last_active": now})
@@ -318,7 +371,7 @@ async def join(req: JoinRequest):
     else:
         free = [(fx, fy) for fx in range(BOARD) for fy in range(BOARD) if (fx, fy) not in taken]
         x, y = random.choice(free) if free else (random.randrange(BOARD), random.randrange(BOARD))
-        start_ap, ap_skip = 1, 0  # "at the beginning" grant
+        start_ap, ap_skip = AP_PER_GRANT.get(req.player_class, 1) or 1, 0  # deploy grant (AP Mine: 2)
     usage = [0] * TOKEN_COLORS
     for d in placed:
         usage[d.get("color", 0) % TOKEN_COLORS] += 1
@@ -362,21 +415,25 @@ async def list_players():
     out = []
     for raw in docs:
         d = await accrue(raw)  # grant any 18:00 APs that came due since the last touch
-        out.append(to_player(d))
+        if not d.get("_eliminated"):
+            out.append(to_player(d))
     return out
 
 
 @router.post("/move", response_model=Player)
 async def move(req: MoveRequest):
-    doc = await accrue(await auth_commander(req))
+    doc = alive(await accrue(await auth_commander(req)))
     me = to_player(doc)
     if me.ap < 1:
         raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
+    if me.immovable:
+        raise HTTPException(status_code=400, detail="Sprinter rest day — you can't move today (every 3rd day)")
     dist = manhattan(me.x, me.y, req.x, req.y)
+    reach = me.range * 2 if me.player_class == "sprinter" else me.range
     if dist == 0:
         raise HTTPException(status_code=400, detail="You are already standing there")
-    if dist > me.range:
-        raise HTTPException(status_code=400, detail=f"Target square is outside your range ({me.range})")
+    if dist > reach:
+        raise HTTPException(status_code=400, detail=f"Target square is outside your move range ({reach})")
     occupant = await db.players.find_one({"x": req.x, "y": req.y})
     if occupant:
         raise HTTPException(status_code=400, detail=f"Square occupied by {occupant['username']}")
@@ -391,8 +448,10 @@ async def move(req: MoveRequest):
 
 @router.post("/attack", response_model=AttackResponse)
 async def attack(req: TargetRequest):
-    doc = await accrue(await auth_commander(req))
+    doc = alive(await accrue(await auth_commander(req)))
     me = to_player(doc)
+    if me.player_class == "ap_mine":
+        raise HTTPException(status_code=400, detail="AP Mines can't attack")
     if me.ap < 1:
         raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
     target_doc = await db.players.find_one({"x": req.target_x, "y": req.target_y})
@@ -403,7 +462,8 @@ async def attack(req: TargetRequest):
     if manhattan(me.x, me.y, req.target_x, req.target_y) > me.range:
         raise HTTPException(status_code=400, detail=f"Target is outside your range ({me.range})")
 
-    health = target_doc.get("health", MAX_HEALTH) - 1
+    damage = 2 if me.player_class == "murderer" else 1
+    health = target_doc.get("health", MAX_HEALTH) - damage
     await db.players.update_one({"id": me.id}, {"$set": {"ap": me.ap - 1}})
     attacker = to_player({**doc, "ap": me.ap - 1})
     if health <= 0:
@@ -424,7 +484,7 @@ async def attack(req: TargetRequest):
 
 @router.post("/transfer", response_model=TransferResponse)
 async def transfer(req: TargetRequest):
-    doc = await accrue(await auth_commander(req))
+    doc = alive(await accrue(await auth_commander(req)))
     me = to_player(doc)
     if me.ap < 1:
         raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
@@ -436,7 +496,11 @@ async def transfer(req: TargetRequest):
     if manhattan(me.x, me.y, req.target_x, req.target_y) > me.range:
         raise HTTPException(status_code=400, detail=f"Target is outside your range ({me.range})")
 
+    if target_doc.get("player_class") == "murderer":
+        raise HTTPException(status_code=400, detail=f"{target_doc['username']} is a Murderer and can't receive AP")
     target = await accrue(target_doc)
+    if target.get("_eliminated"):
+        raise HTTPException(status_code=404, detail="No commander on that square")
     await db.players.update_one({"id": me.id}, {"$set": {"ap": me.ap - 1}})
     await db.players.update_one({"id": target["id"]}, {"$set": {"ap": target["ap"] + 1}})
     await broadcast()
@@ -446,10 +510,41 @@ async def transfer(req: TargetRequest):
     )
 
 
+@router.post("/heal", response_model=TransferResponse)
+async def heal(req: TargetRequest):
+    """Healer only, free: +1 HP (max 3) to another commander in range, once per 2-day period."""
+    doc = alive(await accrue(await auth_commander(req)))
+    me = to_player(doc)
+    if me.player_class != "healer":
+        raise HTTPException(status_code=400, detail="Only Healers can heal")
+    if not me.heal_available:
+        raise HTTPException(status_code=400, detail="You've already healed this period — next heal unlocks at the period end")
+    target_doc = await db.players.find_one({"x": req.target_x, "y": req.target_y})
+    if not target_doc:
+        raise HTTPException(status_code=404, detail="No commander on that square")
+    if target_doc["id"] == me.id:
+        raise HTTPException(status_code=400, detail="Healers can't heal themselves")
+    if manhattan(me.x, me.y, req.target_x, req.target_y) > me.range:
+        raise HTTPException(status_code=400, detail=f"Target is outside your range ({me.range})")
+    target = await accrue(target_doc)
+    if target.get("_eliminated"):
+        raise HTTPException(status_code=404, detail="No commander on that square")
+    period = heal_period(doc, utc_now())
+    health = min(MAX_HEALTH, target["health"] + 1)
+    await db.players.update_one({"id": me.id}, {"$set": {"heal_period_done": period}})
+    await db.players.update_one({"id": target["id"]}, {"$set": {"health": health}})
+    await broadcast()
+    return TransferResponse(
+        source=to_player({**doc, "heal_period_done": period}), target=to_player({**target, "health": health})
+    )
+
+
 @router.post("/expand", response_model=Player)
 async def expand(req: ActionRequest):
-    doc = await accrue(await auth_commander(req))
+    doc = alive(await accrue(await auth_commander(req)))
     me = to_player(doc)
+    if me.player_class == "ap_mine":
+        raise HTTPException(status_code=400, detail="AP Mines can't expand")
     if me.ap < 1:
         raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
     if me.range >= MAX_RANGE:

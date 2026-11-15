@@ -42,6 +42,20 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
 - **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
   `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
 
+## More classes (milestone 9) — PlayerClass = standard|alliance|ap_mine|sprinter|murderer|healer
+- **AP Mine**: 2 AP at deploy, +2 per 6pm grant (AP_PER_GRANT). /attack and /expand -> 400. Move/Transfer OK.
+- **Sprinter**: /move reach = 2×range (attack/transfer/heal use normal range). Rest day = every 3rd 24h-day
+  since created_at (days 3,6,9…): `Player.immovable` true -> /move 400. Admin teleport still works.
+- **Murderer**: attack damage 2. 1 AP at deploy, 0 per 6pm grant, /transfer to a murderer -> 400.
+  Admin give-ap still works (override).
+- **Healer**: free `POST /api/game/heal {username,password,target_x,target_y}` -> `{source,target}`: +1 HP
+  (max 3) to ANOTHER commander in range, once per 48h period since created_at (`heal_period_done`).
+  `Player.heal_available`, `heal_deadline` (period end). accrue(): each completed period without a heal
+  (tracked by `heal_checked`) = -1 HP; at 0 HP the healer is deleted (`_eliminated` -> 410 NEGLECTED on their
+  actions/rejoin; omitted from snapshots). UI: pink "Heal" action (free) only for healers + banner countdown.
+- Class tags in the roster for every non-standard class; banner badges for sprinter rest day / healer duty.
+- All period/day maths are deploy-relative (created_at), not calendar days.
+
 ## Player cap + admin teleport (milestone 8)
 - **Max player count (toggleable)**: `app.settings {_id:"game", max_players_enabled, max_players 1–225}`
   (defaults off/20). GameSettings is public in every snapshot (`BoardState.settings`). When ON and

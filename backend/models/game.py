@@ -22,8 +22,15 @@ CHAT_HISTORY = 30
 # Commander classes, picked once when a profile is created.
 #   standard — random spawn, 1 AP at deploy, +1 AP every 6pm UK time.
 #   alliance — choose your spawn square, but the first two AP grants (deploy + first 6pm) are skipped.
-PlayerClass = Literal["standard", "alliance"]
+#   ap_mine  — double AP (2 at deploy, 2 every 6pm) but cannot Attack or Expand.
+#   sprinter — may Move up to double range, but every 3rd day since deploying they are immovable.
+#   murderer — attacks deal double damage, but never receive AP after the deploy grant (no 6pm, no transfers).
+#   healer   — one free Heal (+1 HP to another commander in range) per 2-day period since deploying;
+#              a period that ends with no heal costs the healer 1 HP.
+PlayerClass = Literal["standard", "alliance", "ap_mine", "sprinter", "murderer", "healer"]
 ALLIANCE_SKIPPED_GRANTS = 2
+SPRINTER_REST_EVERY_DAYS = 3
+HEALER_PERIOD_HOURS = 48
 
 
 class JoinRequest(BaseModel):
@@ -48,6 +55,9 @@ class Player(BaseModel):
     last_active: datetime
     last_moved: datetime
     player_class: PlayerClass = "standard"
+    immovable: bool = False  # sprinter rest day (every 3rd day since deploy)
+    heal_available: bool = False  # healer hasn't healed yet in the current 2-day period
+    heal_deadline: datetime | None = None  # healer: end of the current period (miss it = -1 HP)
     online: bool = False  # True while this commander has a visible browser tab streaming the board
 
 

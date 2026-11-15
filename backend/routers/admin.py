@@ -107,6 +107,8 @@ async def set_range(req: AdminSetRange, request: Request):
 async def give_ap(req: AdminGiveAp, request: Request):
     check_admin(request, req.password)
     doc = await accrue(await _target(req.target_id))
+    if doc.get("_eliminated"):
+        raise HTTPException(status_code=404, detail="That commander is no longer on the grid")
     ap = max(0, doc["ap"] + req.amount)
     await db.players.update_one({"id": doc["id"]}, {"$set": {"ap": ap}})
     await broadcast()

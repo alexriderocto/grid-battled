@@ -1,4 +1,4 @@
-import { MAX_HEALTH, PALETTE } from "@/lib/game";
+import { CLASS_INFO, MAX_HEALTH, PALETTE } from "@/lib/game";
 import type { Player } from "@/lib/game";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -75,12 +75,12 @@ export default function Roster({
               />
               {p.online ? "Online" : "Away"}
             </span>
-            {p.player_class === "alliance" && (
+            {p.player_class !== "standard" && (
               <span
                 data-testid={`class-tag-${p.username}`}
-                className="rounded border border-amber-500/40 bg-amber-500/10 px-1 font-mono text-[9px] uppercase text-amber-300"
+                className="rounded border border-amber-500/40 bg-amber-500/10 px-1 font-mono text-[9px] uppercase whitespace-nowrap text-amber-300"
               >
-                Alliance
+                {CLASS_INFO[p.player_class].label}
               </span>
             )}
             {p.id === selfId && (

@@ -11,10 +11,10 @@ from fastapi import APIRouter, HTTPException, Request
 
 from lib.db import db
 from models.admin import (
-    AdminAuth, AdminGiveAp, AdminOk, AdminSetRange, AdminSettings, AdminTarget, AdminTeleport, AdminUnban, BanEntry,
+    AdminAuth, AdminGiveAp, AdminSetClass, AdminOk, AdminSetRange, AdminSettings, AdminTarget, AdminTeleport, AdminUnban, BanEntry,
 )
 from models.game import GameSettings, Player
-from routers.game import accrue, broadcast, get_settings, to_player, utc_now
+from routers.game import accrue, broadcast, get_settings, heal_period, to_player, utc_now
 
 router = APIRouter(prefix="/game/admin", tags=["admin"])
 
@@ -137,3 +137,17 @@ async def save_settings(req: AdminSettings, request: Request):
     await db.settings.update_one({"_id": "game"}, {"$set": settings.model_dump()}, upsert=True)
     await broadcast()
     return settings
+
+
+@router.post("/set-class", response_model=Player)
+async def set_class(req: AdminSetClass, request: Request):
+    check_admin(request, req.password)
+    doc = await accrue(await _target(req.target_id))
+    if doc.get("_eliminated"):
+        raise HTTPException(status_code=404, detail="That commander is no longer on the grid")
+    update = {"player_class": req.player_class, "ap_skip": 0}
+    if req.player_class == "healer":  # fresh duty clock: no damage for periods before becoming a healer
+        update |= {"heal_checked": heal_period(doc, utc_now()), "heal_period_done": None}
+    await db.players.update_one({"id": doc["id"]}, {"$set": update})
+    await broadcast()
+    return to_player({**doc, **update})

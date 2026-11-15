@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from models.game import ADMIN_MAX_RANGE, GameSettings
+from models.game import ADMIN_MAX_RANGE, GameSettings, PlayerClass
 
 
 class AdminAuth(BaseModel):
@@ -26,6 +26,10 @@ class AdminGiveAp(AdminTarget):
 class AdminTeleport(AdminTarget):
     x: int = Field(ge=0, le=14)
     y: int = Field(ge=0, le=14)
+
+
+class AdminSetClass(AdminTarget):
+    player_class: PlayerClass
 
 
 class AdminSettings(AdminAuth, GameSettings):

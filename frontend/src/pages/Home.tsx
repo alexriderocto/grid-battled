@@ -8,6 +8,7 @@ import {
   Crosshair,
   Footprints,
   HeartPulse,
+  Palette,
   Maximize2,
   Swords,
   Users,
@@ -15,6 +16,8 @@ import {
 import { toast } from "sonner";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import {
+  OWN_RANGE_DEFAULT,
+  RIVAL_RANGE_DEFAULT,
   ADMIN_USERNAME,
   CLASS_INFO,
   MAX_HEALTH,
@@ -51,6 +54,8 @@ import Roster from "@/components/game/Roster";
 import ChatPanel from "@/components/game/ChatPanel";
 import ProfileDialog from "@/components/game/ProfileDialog";
 import ClassPicker from "@/components/game/ClassPicker";
+import AvatarFace from "@/components/game/AvatarFace";
+import CustomiseDialog from "@/components/game/CustomiseDialog";
 import AdminConsole from "@/components/game/AdminConsole";
 
 const BOARD = 15;
@@ -126,12 +131,12 @@ function AvatarToken({ player, isSelf }: { player: Player; isSelf: boolean }) {
         initial={{ scale: 0, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ type: "spring", stiffness: 300, damping: 20 }}
-        className={`flex size-[74%] max-h-[30px] max-w-[30px] items-center justify-center rounded-full border font-mono text-[10px] font-bold text-white shadow-md select-none md:text-xs ${
+        className={`flex size-[74%] max-h-[30px] max-w-[30px] overflow-hidden items-center justify-center rounded-full border font-mono text-[10px] font-bold text-white shadow-md select-none md:text-xs ${
           isSelf ? "animate-radar ring-2 ring-emerald-400 ring-offset-1 ring-offset-slate-900" : ""
         } ${player.online || isSelf ? "" : "opacity-50 grayscale-[40%]"}`}
         style={{ backgroundColor: tint.bg, borderColor: tint.border }}
       >
-        {player.username.charAt(0).toUpperCase()}
+        <AvatarFace player={player} />
       </motion.span>
       {damaged && (
         <span
@@ -188,6 +193,7 @@ export default function Home() {
   const [mode, setMode] = useState<ActionMode | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
+  const [customiseOpen, setCustomiseOpen] = useState(false);
   // New-profile step 2: class choice (and Alliance spawn square) before the commander is created.
   const [newProfile, setNewProfile] = useState<Credentials | null>(null);
   const [pickedClass, setPickedClass] = useState<PlayerClass | null>(null);
@@ -581,17 +587,19 @@ export default function Home() {
   for (const p of players) occupied.set(`${p.y}:${p.x}`, p);
 
   // Shaded range diamonds: sky for your own, faint rose for rival reach. Occupied cells keep their own look.
-  const rangeShadeFor = (x: number, y: number, p: Player | undefined): string => {
-    if (p) return "";
+  // Range diamond tint for an empty cell: your own range wins, then the first rival covering it.
+  // Each commander may pick their own colour (Customise); otherwise sky (yours) / rose (rivals).
+  const rangeTintFor = (x: number, y: number, p: Player | undefined): { color: string; own: boolean } | null => {
+    if (p) return null;
     if (self) {
       const d = manhattan(x, y, self.x, self.y);
-      if (d >= 1 && d <= self.range) return "border-sky-500/25 bg-sky-500/10 hover:border-sky-500/60";
+      if (d >= 1 && d <= self.range) return { color: self.range_color ?? OWN_RANGE_DEFAULT, own: true };
     }
     for (const q of players) {
       if (self && q.id === self.id) continue;
-      if (manhattan(x, y, q.x, q.y) <= q.range) return "border-rose-500/20 bg-rose-500/[0.07] hover:border-rose-500/40";
+      if (manhattan(x, y, q.x, q.y) <= q.range) return { color: q.range_color ?? RIVAL_RANGE_DEFAULT, own: false };
     }
-    return "";
+    return null;
   };
 
   // While a mode is armed, valid targets get a crosshair ring.
@@ -682,13 +690,13 @@ export default function Home() {
         >
           <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-3 py-5">
             <span
-              className="flex size-10 shrink-0 items-center justify-center rounded-full border font-mono text-sm font-bold text-white"
+              className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full border font-mono text-sm font-bold text-white"
               style={{
                 backgroundColor: PALETTE[self.color % PALETTE.length].bg,
                 borderColor: PALETTE[self.color % PALETTE.length].border,
               }}
             >
-              {self.username.charAt(0).toUpperCase()}
+              <AvatarFace player={self} />
             </span>
             <div className="min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-emerald-400">
@@ -767,6 +775,15 @@ export default function Home() {
               Active online
             </Badge>
             <div className="ml-auto">
+              <Button
+                variant="outline"
+                data-testid="customise-button"
+                className="mr-2"
+                onClick={() => setCustomiseOpen(true)}
+              >
+                <Palette className="mr-2 size-4" />
+                Customise
+              </Button>
               <Button variant="destructive" data-testid="leave-button" onClick={handleLeave}>
                 Leave game
               </Button>
@@ -953,13 +970,22 @@ export default function Home() {
                       onMouseLeave={() => {
                         if (p) setHover((h) => (h && h.player.id === p.id ? null : h));
                       }}
+                      data-range-tint={rangeTintFor(c, r, p)?.color ?? undefined}
+                      style={(() => {
+                        const tint = rangeTintFor(c, r, p);
+                        // your own diamond a touch stronger (15% fill) than rivals' (8%)
+                        return tint
+                          ? { backgroundColor: `${tint.color}${tint.own ? "26" : "14"}`, borderColor: `${tint.color}55` }
+                          : undefined;
+                      })()}
                       className={`relative flex aspect-square items-center justify-center rounded-[3px] border transition-colors duration-150 ${
                         p
                           ? isSelf
                             ? "border-emerald-500/70 bg-emerald-950/60"
                             : "border-blue-700/40 bg-[#172554]/70"
-                          : rangeShadeFor(c, r, p) ||
-                            "border-slate-800/80 bg-[#0F172A] hover:border-sky-500/60 hover:bg-slate-800/90"
+                          : rangeTintFor(c, r, p)
+                            ? "hover:brightness-150"
+                            : "border-slate-800/80 bg-[#0F172A] hover:border-sky-500/60 hover:bg-slate-800/90"
                       } ${targetRingFor(c, r, p)} ${p && !mode ? "cursor-pointer" : ""} ${
                         pickingSpawn && !p ? "cursor-crosshair hover:ring-1 hover:ring-amber-400/70" : ""
                       } ${spawn && spawn.x === c && spawn.y === r ? "!border-amber-400 !bg-amber-500/25 ring-2 ring-amber-400" : ""} ${
@@ -1079,6 +1105,13 @@ export default function Home() {
           onSend={(text) => chatMutation.mutate(text)}
         />
       </div>
+
+      <CustomiseDialog
+        open={customiseOpen && Boolean(self)}
+        self={self}
+        creds={self ? credsRef.current : null}
+        onClose={() => setCustomiseOpen(false)}
+      />
 
       <ProfileDialog
         player={players.find((p) => p.id === profileId) ?? null}

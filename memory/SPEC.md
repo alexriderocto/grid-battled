@@ -42,6 +42,17 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
 - **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
   `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
 
+## Profile customisation + admin class change (milestone 10)
+- Banner "Customise" -> CustomiseDialog: searchable country flag list (ISO alpha-2 + GB-ENG/SCT/WLS/NIR;
+  backend/lib/countries.py == frontend/src/lib/countries.ts; images flagcdn.com/<code>.svg) + range colour
+  (8 swatches, custom colour picker, Default). `POST /api/game/profile {username,password,flag|null,range_color|null}`
+  -> Player (422 unknown flag / bad hex, 401). Player gains `flag`, `range_color` (uppercased).
+- AvatarFace renders the flag (or letter) inside every token: map, banner, roster, profile, Cell Intel.
+- Map range tint uses each commander's range_color (defaults: own #0EA5E9, rivals #F43F5E) via inline style;
+  own diamond 15% fill, rivals 8%; cells expose `data-range-tint`.
+- Admin: class Select in AdminControls -> `POST /api/game/admin/set-class {password,target_id,player_class}`;
+  resets ap_skip; switching to healer starts a fresh duty clock (heal_checked = current period) — no retro damage.
+
 ## More classes (milestone 9) — PlayerClass = standard|alliance|ap_mine|sprinter|murderer|healer
 - **AP Mine**: 2 AP at deploy, +2 per 6pm grant (AP_PER_GRANT). /attack and /expand -> 400. Move/Transfer OK.
 - **Sprinter**: /move reach = 2×range (attack/transfer/heal use normal range). Rest day = every 3rd 24h-day

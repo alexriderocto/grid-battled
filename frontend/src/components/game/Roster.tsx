@@ -1,3 +1,4 @@
+import AvatarFace from "@/components/game/AvatarFace";
 import { CLASS_INFO, MAX_HEALTH, PALETTE } from "@/lib/game";
 import type { Player } from "@/lib/game";
 import { Badge } from "@/components/ui/badge";
@@ -53,13 +54,13 @@ export default function Roster({
             }`}
           >
             <span
-              className="flex size-6 shrink-0 items-center justify-center rounded-full border font-mono text-[10px] font-bold text-white"
+              className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border font-mono text-[10px] font-bold text-white"
               style={{
                 backgroundColor: PALETTE[p.color % PALETTE.length].bg,
                 borderColor: PALETTE[p.color % PALETTE.length].border,
               }}
             >
-              {p.username.charAt(0).toUpperCase()}
+              <AvatarFace player={p} />
             </span>
             <span className="font-heading truncate text-sm font-bold text-slate-100">
               {p.username}

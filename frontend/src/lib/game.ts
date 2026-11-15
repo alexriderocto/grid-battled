@@ -19,6 +19,8 @@ export interface Player {
   last_active: string;
   last_moved: string;
   player_class: PlayerClass;
+  flag: string | null; // ISO country code shown instead of the letter token
+  range_color: string | null; // "#RRGGBB" tint for this commander's range diamond
   immovable: boolean; // sprinter rest day (every 3rd day since deploy)
   heal_available: boolean; // healer hasn't healed in the current 2-day period
   heal_deadline: string | null; // healer: end of the current period (miss it = -1 HP)
@@ -161,3 +163,8 @@ export interface BanEntry {
   username: string;
   banned_at: string;
 }
+
+// Range diamond tints: defaults when a commander hasn't picked a colour.
+export const OWN_RANGE_DEFAULT = "#0EA5E9";
+export const RIVAL_RANGE_DEFAULT = "#F43F5E";
+export const RANGE_SWATCHES = ["#0EA5E9", "#10B981", "#F59E0B", "#F43F5E", "#A855F7", "#EC4899", "#14B8A6", "#EAB308"];

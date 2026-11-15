@@ -20,6 +20,7 @@ from pymongo.errors import DuplicateKeyError
 
 from lib.db import db
 from lib.name_filter import REJECTION, is_offensive
+from lib.countries import COUNTRY_CODES
 from models.game import (
     BASE_RANGE,
     CHAT_HISTORY,
@@ -42,6 +43,7 @@ from models.game import (
     JoinRequest,
     MoveRequest,
     NameCheckRequest,
+    ProfileUpdate,
     NameCheckResponse,
     Player,
     TargetRequest,
@@ -186,6 +188,8 @@ def to_player(doc: dict) -> Player:
         last_active=d["last_active"].replace(tzinfo=timezone.utc),
         last_moved=d["last_moved"].replace(tzinfo=timezone.utc),
         player_class=d["player_class"],
+        flag=d.get("flag"),
+        range_color=d.get("range_color"),
         immovable=d["player_class"] == "sprinter" and sprinter_resting(d, utc_now()),
         heal_available=d["player_class"] == "healer" and d.get("heal_period_done") != heal_period(d, utc_now()),
         heal_deadline=heal_deadline(d, utc_now()) if d["player_class"] == "healer" else None,
@@ -508,6 +512,19 @@ async def transfer(req: TargetRequest):
         source=to_player({**doc, "ap": me.ap - 1}),
         target=to_player({**target, "ap": target["ap"] + 1}),
     )
+
+
+@router.post("/profile", response_model=Player)
+async def update_profile(req: ProfileUpdate):
+    """Cosmetics: country flag token + range colour (send null to reset either to default)."""
+    doc = alive(await accrue(await auth_commander(req)))
+    flag = req.flag.upper() if req.flag else None
+    if flag and flag not in COUNTRY_CODES:
+        raise HTTPException(status_code=422, detail="Unknown country flag")
+    color = req.range_color.upper() if req.range_color else None
+    await db.players.update_one({"id": doc["id"]}, {"$set": {"flag": flag, "range_color": color}})
+    await broadcast()
+    return to_player({**doc, "flag": flag, "range_color": color})
 
 
 @router.post("/heal", response_model=TransferResponse)

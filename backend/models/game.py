@@ -55,6 +55,8 @@ class Player(BaseModel):
     last_active: datetime
     last_moved: datetime
     player_class: PlayerClass = "standard"
+    flag: str | None = None  # ISO country code (lib/countries.py) shown instead of the letter token
+    range_color: str | None = None  # "#RRGGBB" tint for this commander's range diamond
     immovable: bool = False  # sprinter rest day (every 3rd day since deploy)
     heal_available: bool = False  # healer hasn't healed yet in the current 2-day period
     heal_deadline: datetime | None = None  # healer: end of the current period (miss it = -1 HP)
@@ -111,6 +113,11 @@ class BoardSnapshot(BaseModel):
     players: list[Player]
     chat: list[ChatMessage]
     settings: GameSettings
+
+
+class ProfileUpdate(ActionRequest):
+    flag: str | None = Field(default=None, max_length=6)
+    range_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
 
 
 class NameCheckRequest(BaseModel):

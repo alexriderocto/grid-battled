@@ -1,3 +1,4 @@
+import AvatarFace from "@/components/game/AvatarFace";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -107,10 +108,10 @@ export default function ProfileDialog({
             <DialogHeader>
               <div className="flex items-center gap-3">
                 <span
-                  className="flex size-11 shrink-0 items-center justify-center rounded-full border font-mono text-base font-bold text-white"
+                  className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-full border font-mono text-base font-bold text-white"
                   style={{ backgroundColor: tint.bg, borderColor: tint.border }}
                 >
-                  {player.username.charAt(0).toUpperCase()}
+                  <AvatarFace player={player} />
                 </span>
                 <div className="min-w-0">
                   <DialogTitle

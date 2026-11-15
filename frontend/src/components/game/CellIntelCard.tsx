@@ -1,3 +1,4 @@
+import AvatarFace from "@/components/game/AvatarFace";
 import { formatDistanceToNow } from "date-fns";
 import { MAX_HEALTH, PALETTE } from "@/lib/game";
 import type { Player } from "@/lib/game";
@@ -25,10 +26,10 @@ export default function CellIntelCard({ player, cx, cy }: { player: Player; cx: 
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="flex size-8 shrink-0 items-center justify-center rounded-full border font-mono text-xs font-bold text-white"
+          className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border font-mono text-xs font-bold text-white"
           style={{ backgroundColor: tint.bg, borderColor: tint.border }}
         >
-          {player.username.charAt(0).toUpperCase()}
+          <AvatarFace player={player} />
         </span>
         <div className="min-w-0">
           <p data-testid="intel-username" className="font-heading truncate text-sm font-bold text-slate-100">

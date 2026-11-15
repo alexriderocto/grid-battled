@@ -3,8 +3,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ban, Gauge, Move, Skull, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { apiPost, ApiError } from "@/lib/api";
-import { ADMIN_MAX_RANGE } from "@/lib/game";
-import type { AdminOk, Player } from "@/lib/game";
+import { ADMIN_MAX_RANGE, CLASS_INFO } from "@/lib/game";
+import type { AdminOk, Player, PlayerClass } from "@/lib/game";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -12,7 +13,8 @@ type AdminCall =
   | { kind: "kill" }
   | { kind: "ban" }
   | { kind: "range"; range: number }
-  | { kind: "ap"; amount: number };
+  | { kind: "ap"; amount: number }
+  | { kind: "class"; player_class: PlayerClass };
 
 function detailOf(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
@@ -54,6 +56,8 @@ export default function AdminControls({
           return apiPost<Player>("/game/admin/set-range", { ...base, range: call.range });
         case "ap":
           return apiPost<Player>("/game/admin/give-ap", { ...base, amount: call.amount });
+        case "class":
+          return apiPost<Player>("/game/admin/set-class", { ...base, player_class: call.player_class });
       }
     },
     onSuccess: (res, call) => {
@@ -61,6 +65,8 @@ export default function AdminControls({
       void queryClient.invalidateQueries({ queryKey: ["board"] });
       if (call.kind === "ban") void queryClient.invalidateQueries({ queryKey: ["admin-bans"] });
       if (call.kind === "kill" || call.kind === "ban") toast.success((res as AdminOk).detail);
+      if (call.kind === "class")
+        toast.success(`${player.username} is now ${CLASS_INFO[(res as Player).player_class].label}`);
       if (call.kind === "range") toast.success(`${player.username}'s range set to ${(res as Player).range}`);
       if (call.kind === "ap") {
         const verb = call.amount >= 0 ? `Gave ${call.amount} AP to` : `Removed ${-call.amount} AP from`;
@@ -107,6 +113,27 @@ export default function AdminControls({
         <Move className="mr-2 size-4" />
         Teleport — then click a free square
       </Button>
+
+      <div className="flex items-center gap-2">
+        <span className="w-[5.5rem] shrink-0 font-mono text-[10px] uppercase tracking-wider text-slate-400">Class</span>
+        <Select
+          value={player.player_class}
+          onValueChange={(v: string) => {
+            if (v !== player.player_class) run.mutate({ kind: "class", player_class: v as PlayerClass });
+          }}
+        >
+          <SelectTrigger data-testid="admin-class-select" size="sm" className="flex-1 border-slate-700 bg-slate-950/60">
+            <SelectValue>{(v) => CLASS_INFO[v as PlayerClass]?.label ?? "Class"}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(CLASS_INFO) as PlayerClass[]).map((c) => (
+              <SelectItem key={c} value={c} data-testid={`admin-class-option-${c}`}>
+                {CLASS_INFO[c].label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
       <form
         className="flex items-center gap-2"

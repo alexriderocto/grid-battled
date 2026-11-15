@@ -42,6 +42,20 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
 - **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
   `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
 
+## Admin (milestone 7) — creds in memory/test_credentials.md
+- Sign in with callsign `Admin` + ADMIN_PASSWORD (backend/.env, "314159") in the normal join form ->
+  `POST /api/game/admin/login {password}`. Admin is NOT a token on the map; AdminConsole replaces the banner
+  (ban list + Unban, Sign out). Session is memory-only (refresh signs out). "admin" callsign reserved (403 on /join).
+- Click any commander (map/roster) -> ProfileDialog shows AdminControls: Kill instantly / Ban callsign
+  (two-click confirm), set Range 0–14 (ADMIN_MAX_RANGE; Expand still caps at 5; >5 shows "n ★"),
+  Give AP (−99..99, floored at 0). All broadcast live.
+- Endpoints (all POST, body carries `password`): /api/game/admin/{login,kill,ban,unban,bans,set-range,give-ap}.
+  401 wrong code, 404 unknown target, 429 after 5 wrong codes/IP (10 min, in-memory).
+- Ban = upsert `app.bans {username_key, username, banned_at}` + delete player. /join and /name-check reject
+  banned callsigns (403 "This callsign has been banned by the Admin"). Kill = delete player (they may redeploy).
+- Banner/range-shading now read the LIVE board copy of yourself (Home `self` = players.find(sessionSelf.id)),
+  so admin edits, AP transfers and damage from others show instantly.
+
 ## Callsign filter (milestone 6)
 - `backend/lib/name_filter.py` `is_offensive()` blocks swearing + racial/hate slurs. Normalises case, accents,
   leetspeak (0/1/3/4/5/7/@/$…), separators, stretched letters (3+ repeats). Two tiers: SUBSTRING_TERMS

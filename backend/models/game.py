@@ -15,6 +15,8 @@ TOKEN_COLORS = 8
 BASE_RANGE = 2
 MAX_RANGE = 5
 MAX_HEALTH = 3
+ADMIN_MAX_RANGE = 14
+ADMIN_USERNAME = "Admin"  # reserved callsign; password from ADMIN_PASSWORD env
 CHAT_HISTORY = 30
 
 # Commander classes, picked once when a profile is created.
@@ -41,7 +43,7 @@ class Player(BaseModel):
     color: int = Field(ge=0, le=TOKEN_COLORS - 1)
     health: int = Field(ge=0, le=MAX_HEALTH)
     ap: int = Field(ge=0)
-    range: int = Field(ge=0, le=MAX_RANGE)
+    range: int = Field(ge=0, le=ADMIN_MAX_RANGE)  # Expand caps at MAX_RANGE; admin may go higher
     created_at: datetime
     last_active: datetime
     last_moved: datetime

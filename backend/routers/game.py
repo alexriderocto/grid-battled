@@ -27,6 +27,7 @@ from models.game import (
     MAX_RANGE,
     TOKEN_COLORS,
     ALLIANCE_SKIPPED_GRANTS,
+    ADMIN_USERNAME,
     ActionRequest,
     AttackResponse,
     BoardSnapshot,
@@ -48,6 +49,7 @@ from models.game import (
 router = APIRouter(prefix="/game", tags=["game"])
 
 BOARD = 15
+BANNED = "This callsign has been banned by the Admin"
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # --- Real-time fan-out: one queue per connected stream -> the commander id it belongs to (None = spectator) ---
@@ -244,8 +246,11 @@ async def state():
 @router.post("/name-check", response_model=NameCheckResponse)
 async def name_check(req: NameCheckRequest):
     """Lets the join form reject a bad callsign before the class picker; /join enforces it again."""
-    if is_offensive(req.username.strip()):
+    name = req.username.strip()
+    if is_offensive(name):
         return NameCheckResponse(allowed=False, detail=REJECTION)
+    if await db.bans.find_one({"username_key": name.lower()}):
+        return NameCheckResponse(allowed=False, detail=BANNED)
     return NameCheckResponse(allowed=True)
 
 
@@ -257,6 +262,10 @@ async def join(req: JoinRequest):
     if is_offensive(username):  # blocks new profiles AND sign-ins to any existing offensive callsign
         raise HTTPException(status_code=400, detail=REJECTION)
     username_key = username.lower()
+    if username_key == ADMIN_USERNAME.lower():
+        raise HTTPException(status_code=403, detail="That callsign is reserved")
+    if await db.bans.find_one({"username_key": username_key}):
+        raise HTTPException(status_code=403, detail=BANNED)
     now = utc_now()
 
     # Rejoin: same callsign + access code restores the same commander in the same square.

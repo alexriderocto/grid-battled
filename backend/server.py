@@ -18,6 +18,7 @@ load_dotenv(ROOT_DIR / '.env')
 # MongoDB connection
 from lib.db import client, db, ensure_indexes
 from routers.game import router as game_router
+from routers.admin import router as admin_router
 
 
 # Startup runs before the yield, shutdown after it. Add your own setup/teardown here.
@@ -66,6 +67,7 @@ async def get_status_checks():
 
 # Game map: join/rejoin commanders + shared board state
 api_router.include_router(game_router)
+api_router.include_router(admin_router)
 
 # Include the router in the main app
 app.include_router(api_router)

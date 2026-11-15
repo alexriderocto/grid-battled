@@ -113,3 +113,17 @@ export interface NameCheckResult {
   allowed: boolean;
   detail: string | null;
 }
+
+// --- Admin console (mirror of backend/models/admin.py) ---
+export const ADMIN_USERNAME = "Admin";
+export const ADMIN_MAX_RANGE = 14;
+
+export interface AdminOk {
+  ok: boolean;
+  detail: string;
+}
+
+export interface BanEntry {
+  username: string;
+  banned_at: string;
+}

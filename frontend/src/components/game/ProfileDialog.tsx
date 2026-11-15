@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import AdminControls from "@/components/game/AdminControls";
 
 function Stat({ label, value, testId }: { label: string; value: string; testId: string }) {
   return (
@@ -33,11 +34,13 @@ export default function ProfileDialog({
   player,
   self,
   creds,
+  adminPassword,
   onClose,
 }: {
   player: Player | null;
   self: Player | null;
   creds: Credentials | null;
+  adminPassword: string | null;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -138,9 +141,11 @@ export default function ProfileDialog({
 
             <div className="grid grid-cols-3 gap-2">
               <Stat label="Action points" value={`${player.ap} AP`} testId="profile-ap" />
-              <Stat label="Range" value={`${player.range} / ${MAX_RANGE}`} testId="profile-range" />
+              <Stat label="Range" value={player.range > MAX_RANGE ? `${player.range} ★` : `${player.range} / ${MAX_RANGE}`} testId="profile-range" />
               <Stat label="Health" value={`${player.health} / ${MAX_HEALTH}`} testId="profile-health" />
             </div>
+
+            {adminPassword && <AdminControls player={player} password={adminPassword} />}
 
             {canMessage ? (
               <div className="flex flex-col gap-2">
@@ -205,7 +210,11 @@ export default function ProfileDialog({
                 data-testid="profile-dm-hint"
                 className="font-mono text-[10px] uppercase tracking-wider text-slate-500"
               >
-                {self ? "This is you" : "Deploy to message this commander privately"}
+                {adminPassword
+                  ? "Admin view — private messages stay between commanders"
+                  : self
+                    ? "This is you"
+                    : "Deploy to message this commander privately"}
               </p>
             )}
           </>

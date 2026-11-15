@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import {
+  ADMIN_USERNAME,
   CLASS_INFO,
   MAX_HEALTH,
   MAX_RANGE,
@@ -29,6 +30,7 @@ import type {
   UnreadCounts,
   PlayerClass,
   NameCheckResult,
+  AdminOk,
 } from "@/lib/game";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,6 +49,7 @@ import Roster from "@/components/game/Roster";
 import ChatPanel from "@/components/game/ChatPanel";
 import ProfileDialog from "@/components/game/ProfileDialog";
 import ClassPicker from "@/components/game/ClassPicker";
+import AdminConsole from "@/components/game/AdminConsole";
 
 const BOARD = 15;
 const STORAGE_KEY = "terra-grid-commander";
@@ -164,7 +167,9 @@ export default function Home() {
   const queryClient = useQueryClient();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [self, setSelf] = useState<Player | null>(null);
+  // Session copy of me (set on join/my actions). Rendering uses the LIVE board copy below so
+  // changes made by others — admin edits, AP transfers, damage — show up instantly.
+  const [sessionSelf, setSelf] = useState<Player | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<ActionMode | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
@@ -174,6 +179,8 @@ export default function Home() {
   const [pickedClass, setPickedClass] = useState<PlayerClass | null>(null);
   const [spawn, setSpawn] = useState<{ x: number; y: number } | null>(null);
   const pickingSpawn = newProfile !== null && pickedClass === "alliance";
+  // Admin session (memory only — a refresh signs the admin out).
+  const [adminPw, setAdminPw] = useState<string | null>(null);
   const credsRef = useRef<Credentials | null>(null);
   const autoJoined = useRef(false);
   const joinedAtRef = useRef(0);
@@ -186,6 +193,9 @@ export default function Home() {
     refetchInterval: 15000,
   });
   const players = playersQuery.data?.players ?? [];
+  const self = sessionSelf
+    ? (players.find((p) => p.id === sessionSelf.id) ?? sessionSelf)
+    : null;
   const chat = playersQuery.data?.chat ?? [];
   const [live, setLive] = useState(false);
 
@@ -428,6 +438,10 @@ export default function Home() {
       return;
     }
     const creds = { username: name, password };
+    if (name.toLowerCase() === ADMIN_USERNAME.toLowerCase()) {
+      adminLogin.mutate(password);
+      return;
+    }
     // Existing callsign -> straight rejoin (class is already locked in). New -> pick a class first.
     if (players.some((p) => p.username.toLowerCase() === name.toLowerCase())) {
       joinMutation.mutate({ creds, auto: false });
@@ -435,6 +449,18 @@ export default function Home() {
       nameCheck.mutate(creds);
     }
   };
+
+  const adminLogin = useMutation({
+    mutationFn: (pw: string) => apiPost<AdminOk>("/game/admin/login", { password: pw }),
+    onSuccess: (_res, pw) => {
+      setAdminPw(pw);
+      setError(null);
+      setUsername("");
+      setPassword("");
+      toast.success("Admin console unlocked");
+    },
+    onError: (err) => setError(errorDetail(err, "Cannot reach command — try again shortly")),
+  });
 
   // New callsign: screen it for swearing/slurs before showing the class picker.
   const nameCheck = useMutation({
@@ -586,7 +612,18 @@ export default function Home() {
       </header>
 
       {/* Join / session panel — directly above the map */}
-      {self ? (
+      {adminPw ? (
+        <AdminConsole
+          password={adminPw}
+          playerCount={players.length}
+          onLeave={() => {
+            setAdminPw(null);
+            setProfileId(null);
+            void queryClient.removeQueries({ queryKey: ["admin-bans"] });
+            toast("Signed out of the admin console");
+          }}
+        />
+      ) : self ? (
         <Card
           data-testid="active-commander-banner"
           className="w-full max-w-4xl border-slate-800 bg-card/90 shadow-xl backdrop-blur-md"
@@ -729,8 +766,8 @@ export default function Home() {
                   className="border-slate-700 bg-slate-950/60 font-mono tracking-[0.4em]"
                 />
               </div>
-              <Button type="submit" data-testid="join-button" disabled={joinMutation.isPending || nameCheck.isPending}>
-                {joinMutation.isPending || nameCheck.isPending ? "Checking…" : "Join map"}
+              <Button type="submit" data-testid="join-button" disabled={joinMutation.isPending || nameCheck.isPending || adminLogin.isPending}>
+                {joinMutation.isPending || nameCheck.isPending || adminLogin.isPending ? "Checking…" : "Join map"}
               </Button>
             </form>
             {error && (
@@ -920,6 +957,7 @@ export default function Home() {
         player={players.find((p) => p.id === profileId) ?? null}
         self={self}
         creds={self ? credsRef.current : null}
+        adminPassword={adminPw}
         onClose={() => setProfileId(null)}
       />
 

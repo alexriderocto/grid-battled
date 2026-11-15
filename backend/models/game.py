@@ -18,6 +18,12 @@ MAX_HEALTH = 3
 ADMIN_MAX_RANGE = 14
 ADMIN_USERNAME = "Admin"  # reserved callsign; password from ADMIN_PASSWORD env
 CHAT_HISTORY = 30
+BOARD = 15  # the 15x15 map proper: x, y in 0..14
+# One hazard ring around the map: x, y = -1 or 15 is "off the map" — reachable, but every daily
+# 6pm UK top-up spent out there costs 1 HP.
+MIN_COORD = -1
+MAX_COORD = BOARD
+EXPAND_COST = 2  # AP per Expand
 
 # Commander classes, picked once when a profile is created.
 #   standard — random spawn, 1 AP at deploy, +1 AP every 6pm UK time.
@@ -45,8 +51,8 @@ class JoinRequest(BaseModel):
 class Player(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     username: str
-    x: int = Field(ge=0, le=14)
-    y: int = Field(ge=0, le=14)
+    x: int = Field(ge=MIN_COORD, le=MAX_COORD)
+    y: int = Field(ge=MIN_COORD, le=MAX_COORD)
     color: int = Field(ge=0, le=TOKEN_COLORS - 1)
     health: int = Field(ge=0, le=MAX_HEALTH)
     ap: int = Field(ge=0)
@@ -58,26 +64,29 @@ class Player(BaseModel):
     flag: str | None = None  # ISO country code (lib/countries.py) shown instead of the letter token
     range_color: str | None = None  # "#RRGGBB" tint for this commander's range diamond
     immovable: bool = False  # sprinter rest day (every 3rd day since deploy)
+    off_map: bool = False  # standing in the hazard ring outside the 15x15 map
     heal_available: bool = False  # healer hasn't healed yet in the current 2-day period
     heal_deadline: datetime | None = None  # healer: end of the current period (miss it = -1 HP)
     online: bool = False  # True while this commander has a visible browser tab streaming the board
 
 
 class ActionRequest(BaseModel):
-    """Identity for every commander action — the callsign + 6-digit code pair IS the session."""
+    """Base body for commander actions. Identity comes from the httpOnly login-pass cookie
+    issued by /game/join (lib/sessions.py) — the access code is never re-sent."""
 
-    username: str = Field(min_length=1, max_length=24)
-    password: str = Field(pattern=r"^\d{6}$")
+
+class LogoutResponse(BaseModel):
+    ok: bool = True
 
 
 class MoveRequest(ActionRequest):
-    x: int = Field(ge=0, le=14)
-    y: int = Field(ge=0, le=14)
+    x: int = Field(ge=MIN_COORD, le=MAX_COORD)
+    y: int = Field(ge=MIN_COORD, le=MAX_COORD)
 
 
 class TargetRequest(ActionRequest):
-    target_x: int = Field(ge=0, le=14)
-    target_y: int = Field(ge=0, le=14)
+    target_x: int = Field(ge=MIN_COORD, le=MAX_COORD)
+    target_y: int = Field(ge=MIN_COORD, le=MAX_COORD)
 
 
 class ChatRequest(ActionRequest):

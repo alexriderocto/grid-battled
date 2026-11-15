@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from models.game import ADMIN_MAX_RANGE, GameSettings, PlayerClass
+from models.game import ADMIN_MAX_RANGE, MAX_COORD, MIN_COORD, GameSettings, PlayerClass
 
 
 class AdminAuth(BaseModel):
@@ -24,8 +24,8 @@ class AdminGiveAp(AdminTarget):
 
 
 class AdminTeleport(AdminTarget):
-    x: int = Field(ge=0, le=14)
-    y: int = Field(ge=0, le=14)
+    x: int = Field(ge=MIN_COORD, le=MAX_COORD)  # the off-map hazard ring is allowed
+    y: int = Field(ge=MIN_COORD, le=MAX_COORD)
 
 
 class AdminSetClass(AdminTarget):

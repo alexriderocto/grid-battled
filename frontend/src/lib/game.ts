@@ -27,9 +27,16 @@ export interface Player {
   online: boolean; // true while the commander has a visible browser tab open on the game
 }
 
+// What the join form sends to POST /game/join (mirror of JoinRequest's identity fields).
+// The code is only sent once — afterwards the httpOnly login-pass cookie identifies you.
 export interface Credentials {
   username: string;
   password: string;
+}
+
+// Mirror of backend/models/game.py::LogoutResponse.
+export interface LogoutResult {
+  ok: boolean;
 }
 
 export interface AttackResult {

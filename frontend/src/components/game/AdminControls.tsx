@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import type { ReactElement } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ban, Gauge, Move, Skull, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { apiPost, ApiError } from "@/lib/api";
+import { apiPost } from "@/lib/api";
+import { errorDetail } from "@/lib/errors";
 import { ADMIN_MAX_RANGE, CLASS_INFO } from "@/lib/game";
 import type { AdminOk, Player, PlayerClass } from "@/lib/game";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import AdminNumberForm from "@/components/game/AdminNumberForm";
 
 type AdminCall =
   | { kind: "kill" }
@@ -16,15 +18,92 @@ type AdminCall =
   | { kind: "ap"; amount: number }
   | { kind: "class"; player_class: PlayerClass };
 
-function detailOf(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    const d = (err.body as { detail?: unknown } | null)?.detail;
-    if (typeof d === "string") return d;
+function callAdmin(call: AdminCall, password: string, targetId: string): Promise<AdminOk | Player> {
+  const base = { password, target_id: targetId };
+  switch (call.kind) {
+    case "kill":
+      return apiPost<AdminOk>("/game/admin/kill", base);
+    case "ban":
+      return apiPost<AdminOk>("/game/admin/ban", base);
+    case "range":
+      return apiPost<Player>("/game/admin/set-range", { ...base, range: call.range });
+    case "ap":
+      return apiPost<Player>("/game/admin/give-ap", { ...base, amount: call.amount });
+    case "class":
+      return apiPost<Player>("/game/admin/set-class", { ...base, player_class: call.player_class });
   }
-  return fallback;
 }
 
-/** Admin-only controls inside a commander's profile: kill, ban, set range, give AP. */
+function successMessage(res: AdminOk | Player, call: AdminCall, name: string): string {
+  switch (call.kind) {
+    case "kill":
+    case "ban":
+      return (res as AdminOk).detail;
+    case "class":
+      return `${name} is now ${CLASS_INFO[(res as Player).player_class].label}`;
+    case "range":
+      return `${name}'s range set to ${(res as Player).range}`;
+    case "ap": {
+      const verb = call.amount >= 0 ? `Gave ${call.amount} AP to` : `Removed ${-call.amount} AP from`;
+      return `${verb} ${name} — now ${(res as Player).ap} AP`;
+    }
+  }
+}
+
+function ConfirmButton({
+  kind,
+  armed,
+  disabled,
+  icon: Icon,
+  idle,
+  confirm,
+  onArm,
+  onConfirm,
+}: {
+  kind: "kill" | "ban";
+  armed: boolean;
+  disabled: boolean;
+  icon: typeof Skull;
+  idle: string;
+  confirm: string;
+  onArm: () => void;
+  onConfirm: () => void;
+}): ReactElement {
+  return (
+    <Button variant="destructive" data-testid={`admin-${kind}-button`} disabled={disabled} onClick={armed ? onConfirm : onArm}>
+      <Icon className="mr-2 size-4" />
+      {armed ? confirm : idle}
+    </Button>
+  );
+}
+
+function ClassSelect({ value, onChange }: { value: PlayerClass; onChange: (c: PlayerClass) => void }): ReactElement {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-[5.5rem] shrink-0 font-mono text-[10px] uppercase tracking-wider text-slate-400">Class</span>
+      <Select
+        value={value}
+        onValueChange={(v: string) => {
+          if (v !== value) onChange(v as PlayerClass);
+        }}
+      >
+        <SelectTrigger data-testid="admin-class-select" size="sm" className="flex-1 border-slate-700 bg-slate-950/60">
+          <SelectValue>{(v) => CLASS_INFO[v as PlayerClass]?.label ?? "Class"}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.keys(CLASS_INFO) as PlayerClass[]).map((c) => (
+            <SelectItem key={c} value={c} data-testid={`admin-class-option-${c}`}>
+              {CLASS_INFO[c].label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/** Admin-only controls inside a commander's profile: kill, ban, teleport, class, range, AP.
+ * The parent keys this by player id + range, so the inputs reset when either changes. */
 export default function AdminControls({
   player,
   password,
@@ -33,80 +112,46 @@ export default function AdminControls({
   player: Player;
   password: string;
   onTeleport: () => void;
-}) {
+}): ReactElement {
   const queryClient = useQueryClient();
-  const [rangeInput, setRangeInput] = useState(String(player.range));
-  const [apInput, setApInput] = useState("1");
   const [confirm, setConfirm] = useState<"kill" | "ban" | null>(null);
 
-  useEffect(() => {
-    setRangeInput(String(player.range));
-    setConfirm(null);
-  }, [player.id, player.range]);
-
   const run = useMutation<AdminOk | Player, Error, AdminCall>({
-    mutationFn: (call) => {
-      const base = { password, target_id: player.id };
-      switch (call.kind) {
-        case "kill":
-          return apiPost<AdminOk>("/game/admin/kill", base);
-        case "ban":
-          return apiPost<AdminOk>("/game/admin/ban", base);
-        case "range":
-          return apiPost<Player>("/game/admin/set-range", { ...base, range: call.range });
-        case "ap":
-          return apiPost<Player>("/game/admin/give-ap", { ...base, amount: call.amount });
-        case "class":
-          return apiPost<Player>("/game/admin/set-class", { ...base, player_class: call.player_class });
-      }
-    },
+    mutationFn: (call) => callAdmin(call, password, player.id),
     onSuccess: (res, call) => {
       setConfirm(null);
       void queryClient.invalidateQueries({ queryKey: ["board"] });
       if (call.kind === "ban") void queryClient.invalidateQueries({ queryKey: ["admin-bans"] });
-      if (call.kind === "kill" || call.kind === "ban") toast.success((res as AdminOk).detail);
-      if (call.kind === "class")
-        toast.success(`${player.username} is now ${CLASS_INFO[(res as Player).player_class].label}`);
-      if (call.kind === "range") toast.success(`${player.username}'s range set to ${(res as Player).range}`);
-      if (call.kind === "ap") {
-        const verb = call.amount >= 0 ? `Gave ${call.amount} AP to` : `Removed ${-call.amount} AP from`;
-        toast.success(`${verb} ${player.username} — now ${(res as Player).ap} AP`);
-      }
+      toast.success(successMessage(res, call, player.username));
     },
-    onError: (err) => toast.error(detailOf(err, "Admin action failed")),
+    onError: (err) => toast.error(errorDetail(err, "Admin action failed")),
   });
 
-  const rangeVal = Number(rangeInput);
-  const rangeOk = rangeInput !== "" && Number.isInteger(rangeVal) && rangeVal >= 0 && rangeVal <= ADMIN_MAX_RANGE;
-  const apVal = Number(apInput);
-  const apOk = apInput !== "" && Number.isInteger(apVal) && apVal !== 0 && Math.abs(apVal) <= 99;
-
   return (
-    <div
-      data-testid="admin-controls"
-      className="flex flex-col gap-3 rounded-lg border border-amber-500/40 bg-amber-500/[0.06] p-3"
-    >
+    <div data-testid="admin-controls" className="flex flex-col gap-3 rounded-lg border border-amber-500/40 bg-amber-500/[0.06] p-3">
       <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-300">Admin controls</p>
 
       <div className="grid grid-cols-2 gap-2">
-        <Button
-          variant="destructive"
-          data-testid="admin-kill-button"
+        <ConfirmButton
+          kind="kill"
+          armed={confirm === "kill"}
           disabled={run.isPending}
-          onClick={() => (confirm === "kill" ? run.mutate({ kind: "kill" }) : setConfirm("kill"))}
-        >
-          <Skull className="mr-2 size-4" />
-          {confirm === "kill" ? "Confirm kill" : "Kill instantly"}
-        </Button>
-        <Button
-          variant="destructive"
-          data-testid="admin-ban-button"
+          icon={Skull}
+          idle="Kill instantly"
+          confirm="Confirm kill"
+          onArm={() => setConfirm("kill")}
+          onConfirm={() => run.mutate({ kind: "kill" })}
+        />
+        <ConfirmButton
+          kind="ban"
+          armed={confirm === "ban"}
           disabled={run.isPending}
-          onClick={() => (confirm === "ban" ? run.mutate({ kind: "ban" }) : setConfirm("ban"))}
-        >
-          <Ban className="mr-2 size-4" />
-          {confirm === "ban" ? "Confirm ban" : "Ban callsign"}
-        </Button>
+          icon={Ban}
+          idle="Ban callsign"
+          confirm="Confirm ban"
+          onArm={() => setConfirm("ban")}
+          onConfirm={() => run.mutate({ kind: "ban" })}
+        />
       </div>
 
       <Button variant="outline" data-testid="admin-teleport-button" onClick={onTeleport}>
@@ -114,72 +159,32 @@ export default function AdminControls({
         Teleport — then click a free square
       </Button>
 
-      <div className="flex items-center gap-2">
-        <span className="w-[5.5rem] shrink-0 font-mono text-[10px] uppercase tracking-wider text-slate-400">Class</span>
-        <Select
-          value={player.player_class}
-          onValueChange={(v: string) => {
-            if (v !== player.player_class) run.mutate({ kind: "class", player_class: v as PlayerClass });
-          }}
-        >
-          <SelectTrigger data-testid="admin-class-select" size="sm" className="flex-1 border-slate-700 bg-slate-950/60">
-            <SelectValue>{(v) => CLASS_INFO[v as PlayerClass]?.label ?? "Class"}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {(Object.keys(CLASS_INFO) as PlayerClass[]).map((c) => (
-              <SelectItem key={c} value={c} data-testid={`admin-class-option-${c}`}>
-                {CLASS_INFO[c].label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      <ClassSelect value={player.player_class} onChange={(c) => run.mutate({ kind: "class", player_class: c })} />
 
-      <form
-        className="flex items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (rangeOk) run.mutate({ kind: "range", range: rangeVal });
-        }}
-      >
-        <Gauge className="size-4 shrink-0 text-amber-300" />
-        <span className="w-16 shrink-0 font-mono text-[10px] uppercase tracking-wider text-slate-400">Range</span>
-        <Input
-          data-testid="admin-range-input"
-          type="number"
-          min={0}
-          max={ADMIN_MAX_RANGE}
-          value={rangeInput}
-          onChange={(e) => setRangeInput(e.target.value)}
-          className="h-8 border-slate-700 bg-slate-950/60 font-mono"
-        />
-        <Button type="submit" size="sm" variant="outline" data-testid="admin-range-button" disabled={!rangeOk || run.isPending}>
-          Set
-        </Button>
-      </form>
-
-      <form
-        className="flex items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (apOk) run.mutate({ kind: "ap", amount: apVal });
-        }}
-      >
-        <Zap className="size-4 shrink-0 text-amber-300" />
-        <span className="w-16 shrink-0 font-mono text-[10px] uppercase tracking-wider text-slate-400">Give AP</span>
-        <Input
-          data-testid="admin-ap-input"
-          type="number"
-          min={-99}
-          max={99}
-          value={apInput}
-          onChange={(e) => setApInput(e.target.value)}
-          className="h-8 border-slate-700 bg-slate-950/60 font-mono"
-        />
-        <Button type="submit" size="sm" variant="outline" data-testid="admin-ap-button" disabled={!apOk || run.isPending}>
-          Give
-        </Button>
-      </form>
+      <AdminNumberForm
+        icon={Gauge}
+        label="Range"
+        testId="admin-range"
+        initial={String(player.range)}
+        min={0}
+        max={ADMIN_MAX_RANGE}
+        isValid={(n) => n >= 0 && n <= ADMIN_MAX_RANGE}
+        submitLabel="Set"
+        disabled={run.isPending}
+        onSubmit={(n) => run.mutate({ kind: "range", range: n })}
+      />
+      <AdminNumberForm
+        icon={Zap}
+        label="Give AP"
+        testId="admin-ap"
+        initial="1"
+        min={-99}
+        max={99}
+        isValid={(n) => n !== 0 && Math.abs(n) <= 99}
+        submitLabel="Give"
+        disabled={run.isPending}
+        onSubmit={(n) => run.mutate({ kind: "ap", amount: n })}
+      />
       <p className="font-mono text-[9px] uppercase tracking-wider text-slate-500">
         Tip: you can also drag tokens on the map · Range 0–{ADMIN_MAX_RANGE} · negative AP removes it
       </p>

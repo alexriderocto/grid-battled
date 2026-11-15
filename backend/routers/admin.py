@@ -9,12 +9,13 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 
+from lib import sessions
 from lib.db import db
 from models.admin import (
     AdminAuth, AdminGiveAp, AdminSetClass, AdminOk, AdminSetRange, AdminSettings, AdminTarget, AdminTeleport, AdminUnban, BanEntry,
 )
 from models.game import GameSettings, Player
-from routers.game import accrue, broadcast, get_settings, heal_period, to_player, utc_now
+from routers.game import accrue, broadcast, get_settings, heal_period, off_map_since_after_move, to_player, utc_now
 
 router = APIRouter(prefix="/game/admin", tags=["admin"])
 
@@ -60,6 +61,7 @@ async def kill(req: AdminTarget, request: Request):
     check_admin(request, req.password)
     doc = await _target(req.target_id)
     await db.players.delete_one({"id": doc["id"]})
+    await sessions.revoke_player(doc["id"])
     await broadcast()
     return AdminOk(detail=f"{doc['username']} was eliminated by the Admin")
 
@@ -74,6 +76,7 @@ async def ban(req: AdminTarget, request: Request):
         upsert=True,
     )
     await db.players.delete_one({"id": doc["id"]})
+    await sessions.revoke_player(doc["id"])
     await broadcast()
     return AdminOk(detail=f"{doc['username']} has been banned")
 
@@ -125,9 +128,10 @@ async def teleport(req: AdminTeleport, request: Request):
     if occupant:
         raise HTTPException(status_code=400, detail=f"Square occupied by {occupant['username']}")
     now = utc_now()
-    await db.players.update_one({"id": doc["id"]}, {"$set": {"x": req.x, "y": req.y, "last_moved": now}})
+    update = {"x": req.x, "y": req.y, "last_moved": now, "off_map_since": off_map_since_after_move(doc, req.x, req.y, now)}
+    await db.players.update_one({"id": doc["id"]}, {"$set": update})
     await broadcast()
-    return to_player({**doc, "x": req.x, "y": req.y, "last_moved": now})
+    return to_player({**doc, **update})
 
 
 @router.post("/settings", response_model=GameSettings)

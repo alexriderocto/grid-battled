@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import type { ReactElement } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Users } from "lucide-react";
 import { toast } from "sonner";
-import { apiPost, ApiError } from "@/lib/api";
+import { apiPost } from "@/lib/api";
+import { errorDetail } from "@/lib/errors";
 import type { GameSettings } from "@/lib/game";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,17 +20,19 @@ export default function PlayerCapControl({
   password: string;
   settings: GameSettings | undefined;
   playerCount: number;
-}) {
+}): ReactElement {
   const queryClient = useQueryClient();
   const [enabled, setEnabled] = useState(false);
   const [cap, setCap] = useState("20");
 
   // Sync the form with the live server settings.
+  const serverEnabled = settings?.max_players_enabled;
+  const serverCap = settings?.max_players;
   useEffect(() => {
-    if (!settings) return;
-    setEnabled(settings.max_players_enabled);
-    setCap(String(settings.max_players));
-  }, [settings?.max_players_enabled, settings?.max_players]);
+    if (serverEnabled === undefined || serverCap === undefined) return;
+    setEnabled(serverEnabled);
+    setCap(String(serverCap));
+  }, [serverEnabled, serverCap]);
 
   const save = useMutation({
     mutationFn: (next: GameSettings) => apiPost<GameSettings>("/game/admin/settings", { password, ...next }),
@@ -38,10 +42,7 @@ export default function PlayerCapControl({
         res.max_players_enabled ? `Player cap ON — max ${res.max_players} commanders` : "Player cap OFF — unlimited",
       );
     },
-    onError: (err) => {
-      const d = err instanceof ApiError ? (err.body as { detail?: unknown } | null)?.detail : null;
-      toast.error(typeof d === "string" ? d : "Could not save the player cap");
-    },
+    onError: (err) => toast.error(errorDetail(err, "Could not save the player cap")),
   });
 
   const capVal = Number(cap);

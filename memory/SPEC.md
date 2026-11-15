@@ -148,9 +148,29 @@ Mongo `app.messages`: `{id, username, color, text, created_at}` (index created_a
 `frontend/src/lib/game.ts` (Player, AttackResult, TransferResult, ChatMessage, BoardState, PALETTE, constants) mirrors
 `backend/models/game.py`. Keep both in sync.
 
-## Auth
-No auth framework — callsign + 6-digit code IS the identity (hashed, passlib). Every action
-request re-sends the pair; server verifies. No seeded accounts. No login gating.
+## Auth (login pass — updated)
+Callsign + 6-digit code is checked ONCE at `POST /api/game/join` (pbkdf2 hash). On success the server
+sets an httpOnly, SameSite=Lax (Secure on https) cookie `gb_session` (path /api, 30 days) holding a
+random token; only its SHA-256 is stored in `db.sessions {token_hash UNIQUE, player_id, created_at,
+expires_at TTL}` (backend/lib/sessions.py). Every commander endpoint (move/attack/transfer/heal/expand/
+profile/chat/dm/*) now authenticates ONLY by that cookie — request bodies no longer carry
+username/password (ActionRequest is an empty base model). 401 = no/expired/forged pass -> the UI signs
+out with a "login pass expired" toast.
+- `GET /api/game/session` -> Player | null (null = no valid pass; the UI shows the join form). Used on page
+  load to resume after refresh. `POST /api/game/logout` -> {ok} revokes the pass + clears the cookie.
+- Passes die with the commander: attack elimination, admin kill and admin ban revoke all their passes.
+- The browser stores NOTHING about the code; the legacy localStorage key "terra-grid-commander" is
+  deleted on load. Admin code stays memory-only (refresh signs the admin out).
+- Note: older endpoint lines above that list `{username,password,...}` bodies are superseded — the
+  bodies now hold only the action fields (e.g. move `{x,y}`, attack `{target_x,target_y}`, dm/send `{to_id,text}`).
+
+## Frontend layout (refactor)
+pages/Home.tsx composes hooks + components only. hooks/: useBoard (+useBoardStream SSE/presence),
+useCommanderSession (join/resume/leave/elimination), useActions (armed mode + action mutation),
+useAdminSession, useJoinFlow (form → name check → class picker), useUnreadMessages. components/game/:
+GameHeader, CommanderBanner, JoinPanel, GameBoard + BoardCell, ActionBar, DMThread, FlagPicker,
+RangeColorPicker, AdminNumberForm, RosterRow, ClassOptionCard, BanList (+ the existing dialogs/panels).
+lib/errors.ts: shared errorDetail / isAuthError.
 
 ## Frontend
 - `frontend/src/pages/Home.tsx` (map, join, banner, action bar) + `src/components/game/CellIntelCard.tsx`

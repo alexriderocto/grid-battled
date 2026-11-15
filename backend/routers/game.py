@@ -9,15 +9,16 @@ on every read/write, so restarts or downtime never lose a grant.
 import asyncio
 import json
 import os
-import random
+import secrets
 from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from passlib.context import CryptContext
 from pymongo.errors import DuplicateKeyError
 
+from lib import sessions
 from lib.db import db
 from lib.name_filter import REJECTION, is_offensive
 from lib.countries import COUNTRY_CODES
@@ -31,7 +32,8 @@ from models.game import (
     HEALER_PERIOD_HOURS,
     SPRINTER_REST_EVERY_DAYS,
     ADMIN_USERNAME,
-    ActionRequest,
+    BOARD,
+    EXPAND_COST,
     AttackResponse,
     BoardSnapshot,
     GameSettings,
@@ -41,6 +43,7 @@ from models.game import (
     DMSendRequest,
     DMThreadRequest,
     JoinRequest,
+    LogoutResponse,
     MoveRequest,
     NameCheckRequest,
     ProfileUpdate,
@@ -53,7 +56,6 @@ from models.game import (
 
 router = APIRouter(prefix="/game", tags=["game"])
 
-BOARD = 15
 BANNED = "This callsign has been banned by the Admin"
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
@@ -69,6 +71,21 @@ def utc_now() -> datetime:
 
 def app_tz() -> ZoneInfo:
     return ZoneInfo(os.environ.get("APP_TZ", "UTC"))
+
+
+def on_map(x: int, y: int) -> bool:
+    """Inside the 15x15 map proper (the ring at -1 / 15 is the off-map hazard zone)."""
+    return 0 <= x < BOARD and 0 <= y < BOARD
+
+
+def off_map_since_after_move(doc: dict, x: int, y: int, now: datetime) -> datetime | None:
+    """New `off_map_since` for a commander arriving at (x, y): the clock starts when they step
+    off the map, keeps running while they roam the ring, and clears once they're back on."""
+    if on_map(x, y):
+        return None
+    if on_map(doc["x"], doc["y"]):
+        return now
+    return doc.get("off_map_since") or now
 
 
 def manhattan(ax: int, ay: int, bx: int, by: int) -> int:
@@ -127,19 +144,28 @@ def heal_deadline(d: dict, now: datetime) -> datetime:
 
 AP_PER_GRANT = {"ap_mine": 2, "murderer": 0}  # everyone else: 1
 NEGLECTED = "You were eliminated for neglecting your healing duty — join again to redeploy"
+STRANDED = "You were eliminated after too many days off the map — join again to redeploy"
 
 
 def alive(d: dict) -> dict:
-    """Raise if accrue() just eliminated this commander (healer neglect); announce it to everyone."""
+    """Raise if accrue() just eliminated this commander (healer neglect / off-map); announce it."""
     if d.get("_eliminated"):
         asyncio.get_running_loop().create_task(broadcast())
-        raise HTTPException(status_code=410, detail=NEGLECTED)
+        raise HTTPException(status_code=410, detail=d["_eliminated"])
+    return d
+
+
+async def eliminate(d: dict, reason: str) -> dict:
+    await db.players.delete_one({"id": d["id"]})
+    await sessions.revoke_player(d["id"])
+    d["_eliminated"] = reason
     return d
 
 
 async def accrue(doc: dict) -> dict:
-    """Bring one commander up to date: grant due APs (class-aware) and apply healer neglect damage.
-    A healer who drops to 0 HP is removed and returned with `_eliminated` set."""
+    """Bring one commander up to date: grant due APs (class-aware), healer neglect damage and
+    off-map damage (1 HP per 6pm top-up passed off the map). A commander who drops to 0 HP is
+    removed and returned with `_eliminated` set to the reason."""
     d = normalize(doc)
     now = utc_now()
     if d["player_class"] == "healer":
@@ -150,9 +176,7 @@ async def accrue(doc: dict) -> dict:
             d["heal_checked"] = current
             d["health"] = max(0, d["health"] - missed)
             if d["health"] <= 0:
-                await db.players.delete_one({"id": d["id"]})
-                d["_eliminated"] = True
-                return d
+                return await eliminate(d, NEGLECTED)
             await db.players.update_one(
                 {"id": d["id"]}, {"$set": {"health": d["health"], "heal_checked": current}}
             )
@@ -165,9 +189,14 @@ async def accrue(doc: dict) -> dict:
         d["ap"] += (len(grants) - skipped) * AP_PER_GRANT.get(d["player_class"], 1)
         d["ap_skip"] -= skipped
         d["ap_as_of"] = grants[-1]
+        if not on_map(d["x"], d["y"]):
+            since = aware(d.get("off_map_since") or ap_as_of)
+            d["health"] = max(0, d["health"] - sum(1 for g in grants if g > since))
+            if d["health"] <= 0:
+                return await eliminate(d, STRANDED)
         await db.players.update_one(
             {"id": d["id"]},
-            {"$set": {"ap": d["ap"], "ap_as_of": d["ap_as_of"], "ap_skip": d["ap_skip"]}},
+            {"$set": {"ap": d["ap"], "ap_as_of": d["ap_as_of"], "ap_skip": d["ap_skip"], "health": d["health"]}},
         )
     return d
 
@@ -191,6 +220,7 @@ def to_player(doc: dict) -> Player:
         flag=d.get("flag"),
         range_color=d.get("range_color"),
         immovable=d["player_class"] == "sprinter" and sprinter_resting(d, utc_now()),
+        off_map=not on_map(d["x"], d["y"]),
         heal_available=d["player_class"] == "healer" and d.get("heal_period_done") != heal_period(d, utc_now()),
         heal_deadline=heal_deadline(d, utc_now()) if d["player_class"] == "healer" else None,
         online=PRESENCE.get(d["id"], 0) > 0,
@@ -287,12 +317,15 @@ async def sse_generator(request: Request, player_id: str | None):
             asyncio.get_running_loop().create_task(broadcast())
 
 
-async def auth_commander(req: ActionRequest) -> dict:
-    """Verify the callsign + access code pair; the raw doc (pre-accrual) on success."""
-    username = req.username.strip()
-    doc = await db.players.find_one({"username_key": username.lower()}) if username else None
-    if not doc or not pwd_context.verify(req.password, doc["password_hash"]):
-        raise HTTPException(status_code=401, detail=f"Invalid credentials for commander {username or '?'}")
+SESSION_EXPIRED = "Your login pass has expired — sign in again with your callsign and access code"
+_rng = secrets.SystemRandom()
+
+
+async def auth_commander(request: Request) -> dict:
+    """The signed-in commander behind this request's login-pass cookie (raw doc, pre-accrual)."""
+    doc = await sessions.current_player(request)
+    if not doc:
+        raise HTTPException(status_code=401, detail=SESSION_EXPIRED)
     return doc
 
 
@@ -333,59 +366,63 @@ async def name_check(req: NameCheckRequest):
     return NameCheckResponse(allowed=True)
 
 
-@router.post("/join", response_model=Player)
-async def join(req: JoinRequest):
-    username = req.username.strip()
+def _check_callsign(raw: str) -> tuple[str, str]:
+    """Validate a callsign for joining; returns (display name, lowercase key)."""
+    username = raw.strip()
     if not username:
         raise HTTPException(status_code=422, detail="Username cannot be empty")
     if is_offensive(username):  # blocks new profiles AND sign-ins to any existing offensive callsign
         raise HTTPException(status_code=400, detail=REJECTION)
-    username_key = username.lower()
-    if username_key == ADMIN_USERNAME.lower():
+    if username.lower() == ADMIN_USERNAME.lower():
         raise HTTPException(status_code=403, detail="That callsign is reserved")
-    if await db.bans.find_one({"username_key": username_key}):
-        raise HTTPException(status_code=403, detail=BANNED)
+    return username, username.lower()
+
+
+async def _rejoin(existing: dict, password: str) -> Player:
+    """Same callsign + access code restores the same commander in the same square."""
+    if not pwd_context.verify(password, existing["password_hash"]):
+        raise HTTPException(status_code=401, detail=f"Invalid password for commander {existing['username']}")
+    doc = alive(await accrue(existing))
     now = utc_now()
+    await db.players.update_one({"id": doc["id"]}, {"$set": {"last_active": now}})
+    await broadcast()
+    return to_player({**doc, "last_active": now})
 
-    # Rejoin: same callsign + access code restores the same commander in the same square.
-    existing = await db.players.find_one({"username_key": username_key})
-    if existing:
-        if not pwd_context.verify(req.password, existing["password_hash"]):
-            raise HTTPException(status_code=401, detail=f"Invalid password for commander {username}")
-        existing = alive(await accrue(existing))
-        await db.players.update_one({"id": existing["id"]}, {"$set": {"last_active": now}})
-        await broadcast()
-        return to_player({**existing, "last_active": now})
 
-    # New commander, wearing the least-used token color.
-    #   standard: random FREE square (pure-random fallback once the board fills up), 1 AP now.
-    #   alliance: the square they chose (must be free), and the first two AP grants are withheld.
-    placed = await db.players.find({}, {"x": 1, "y": 1, "color": 1}).to_list(BOARD * BOARD)
-    full = await full_message(len(placed))  # the cap only blocks NEW commanders; rejoins always work
-    if full:
-        raise HTTPException(status_code=403, detail=full)
-    taken = {(d["x"], d["y"]) for d in placed}
+def _spawn(req: JoinRequest, taken: set[tuple[int, int]]) -> tuple[int, int, int, int]:
+    """(x, y, starting AP, withheld grants) for a new commander.
+    standard & co: random FREE square (pure-random fallback once the board fills up).
+    alliance: the square they chose (must be free), and the first two AP grants are withheld."""
     if req.player_class == "alliance":
         if req.spawn_x is None or req.spawn_y is None:
             raise HTTPException(status_code=422, detail="Alliance commanders must choose a spawn square")
         if (req.spawn_x, req.spawn_y) in taken:
             raise HTTPException(status_code=400, detail="That spawn square is already occupied — pick another")
-        x, y = req.spawn_x, req.spawn_y
-        start_ap, ap_skip = 0, ALLIANCE_SKIPPED_GRANTS - 1  # deploy grant withheld now, first 6pm later
-    else:
-        free = [(fx, fy) for fx in range(BOARD) for fy in range(BOARD) if (fx, fy) not in taken]
-        x, y = random.choice(free) if free else (random.randrange(BOARD), random.randrange(BOARD))
-        start_ap, ap_skip = AP_PER_GRANT.get(req.player_class, 1) or 1, 0  # deploy grant (AP Mine: 2)
+        return req.spawn_x, req.spawn_y, 0, ALLIANCE_SKIPPED_GRANTS - 1  # deploy grant withheld now, first 6pm later
+    free = [(fx, fy) for fx in range(BOARD) for fy in range(BOARD) if (fx, fy) not in taken]
+    x, y = _rng.choice(free) if free else (_rng.randrange(BOARD), _rng.randrange(BOARD))
+    return x, y, AP_PER_GRANT.get(req.player_class, 1) or 1, 0  # deploy grant (AP Mine: 2)
+
+
+def _least_used_color(placed: list[dict]) -> int:
     usage = [0] * TOKEN_COLORS
     for d in placed:
         usage[d.get("color", 0) % TOKEN_COLORS] += 1
-    color = random.choice([c for c, n in enumerate(usage) if n == min(usage)])
+    return _rng.choice([c for c, n in enumerate(usage) if n == min(usage)])
 
+
+async def _create(req: JoinRequest, username: str, username_key: str) -> Player:
+    placed = await db.players.find({}, {"x": 1, "y": 1, "color": 1}).to_list(BOARD * BOARD)
+    full = await full_message(len(placed))  # the cap only blocks NEW commanders; rejoins always work
+    if full:
+        raise HTTPException(status_code=403, detail=full)
+    x, y, start_ap, ap_skip = _spawn(req, {(d["x"], d["y"]) for d in placed})
+    now = utc_now()
     player = Player(
         username=username,
         x=x,
         y=y,
-        color=color,
+        color=_least_used_color(placed),
         health=MAX_HEALTH,
         ap=start_ap,
         range=BASE_RANGE,
@@ -413,6 +450,38 @@ async def join(req: JoinRequest):
     return to_player(doc)
 
 
+@router.post("/join", response_model=Player)
+async def join(req: JoinRequest, request: Request, response: Response):
+    """Check callsign + access code once, then hand out an httpOnly login pass."""
+    username, username_key = _check_callsign(req.username)
+    if await db.bans.find_one({"username_key": username_key}):
+        raise HTTPException(status_code=403, detail=BANNED)
+    existing = await db.players.find_one({"username_key": username_key})
+    player = await _rejoin(existing, req.password) if existing else await _create(req, username, username_key)
+    await sessions.issue(request, response, player.id)
+    return player
+
+
+@router.get("/session", response_model=Player | None)
+async def resume(request: Request):
+    """Returning after a refresh: the login-pass cookie restores the commander without the code.
+    No (or an expired) pass is not an error here — it just means "show the join form" (null)."""
+    raw = await sessions.current_player(request)
+    if not raw:
+        return None
+    doc = alive(await accrue(raw))
+    now = utc_now()
+    await db.players.update_one({"id": doc["id"]}, {"$set": {"last_active": now}})
+    await broadcast()
+    return to_player({**doc, "last_active": now})
+
+
+@router.post("/logout", response_model=LogoutResponse)
+async def logout(request: Request, response: Response):
+    await sessions.revoke(request, response)
+    return LogoutResponse()
+
+
 @router.get("/players", response_model=list[Player])
 async def list_players():
     docs = await db.players.find().sort("created_at", 1).to_list(BOARD * BOARD)
@@ -425,8 +494,8 @@ async def list_players():
 
 
 @router.post("/move", response_model=Player)
-async def move(req: MoveRequest):
-    doc = alive(await accrue(await auth_commander(req)))
+async def move(req: MoveRequest, request: Request):
+    doc = alive(await accrue(await auth_commander(request)))
     me = to_player(doc)
     if me.ap < 1:
         raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
@@ -442,17 +511,21 @@ async def move(req: MoveRequest):
     if occupant:
         raise HTTPException(status_code=400, detail=f"Square occupied by {occupant['username']}")
     now = utc_now()
-    await db.players.update_one(
-        {"id": me.id},
-        {"$set": {"x": req.x, "y": req.y, "ap": me.ap - 1, "last_moved": now}},
-    )
+    update = {
+        "x": req.x,
+        "y": req.y,
+        "ap": me.ap - 1,
+        "last_moved": now,
+        "off_map_since": off_map_since_after_move(doc, req.x, req.y, now),
+    }
+    await db.players.update_one({"id": me.id}, {"$set": update})
     await broadcast()
-    return to_player({**doc, "x": req.x, "y": req.y, "ap": me.ap - 1, "last_moved": now})
+    return to_player({**doc, **update})
 
 
 @router.post("/attack", response_model=AttackResponse)
-async def attack(req: TargetRequest):
-    doc = alive(await accrue(await auth_commander(req)))
+async def attack(req: TargetRequest, request: Request):
+    doc = alive(await accrue(await auth_commander(request)))
     me = to_player(doc)
     if me.player_class == "ap_mine":
         raise HTTPException(status_code=400, detail="AP Mines can't attack")
@@ -472,6 +545,7 @@ async def attack(req: TargetRequest):
     attacker = to_player({**doc, "ap": me.ap - 1})
     if health <= 0:
         await db.players.delete_one({"id": target_doc["id"]})
+        await sessions.revoke_player(target_doc["id"])
         await broadcast()
         return AttackResponse(
             attacker=attacker, target=None, target_username=target_doc["username"], eliminated=True
@@ -487,8 +561,8 @@ async def attack(req: TargetRequest):
 
 
 @router.post("/transfer", response_model=TransferResponse)
-async def transfer(req: TargetRequest):
-    doc = alive(await accrue(await auth_commander(req)))
+async def transfer(req: TargetRequest, request: Request):
+    doc = alive(await accrue(await auth_commander(request)))
     me = to_player(doc)
     if me.ap < 1:
         raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
@@ -515,9 +589,9 @@ async def transfer(req: TargetRequest):
 
 
 @router.post("/profile", response_model=Player)
-async def update_profile(req: ProfileUpdate):
+async def update_profile(req: ProfileUpdate, request: Request):
     """Cosmetics: country flag token + range colour (send null to reset either to default)."""
-    doc = alive(await accrue(await auth_commander(req)))
+    doc = alive(await accrue(await auth_commander(request)))
     flag = req.flag.upper() if req.flag else None
     if flag and flag not in COUNTRY_CODES:
         raise HTTPException(status_code=422, detail="Unknown country flag")
@@ -528,9 +602,9 @@ async def update_profile(req: ProfileUpdate):
 
 
 @router.post("/heal", response_model=TransferResponse)
-async def heal(req: TargetRequest):
+async def heal(req: TargetRequest, request: Request):
     """Healer only, free: +1 HP (max 3) to another commander in range, once per 2-day period."""
-    doc = alive(await accrue(await auth_commander(req)))
+    doc = alive(await accrue(await auth_commander(request)))
     me = to_player(doc)
     if me.player_class != "healer":
         raise HTTPException(status_code=400, detail="Only Healers can heal")
@@ -557,23 +631,24 @@ async def heal(req: TargetRequest):
 
 
 @router.post("/expand", response_model=Player)
-async def expand(req: ActionRequest):
-    doc = alive(await accrue(await auth_commander(req)))
+async def expand(request: Request):
+    doc = alive(await accrue(await auth_commander(request)))
     me = to_player(doc)
     if me.player_class == "ap_mine":
         raise HTTPException(status_code=400, detail="AP Mines can't expand")
-    if me.ap < 1:
-        raise HTTPException(status_code=400, detail="Not enough AP — next resupply at 6pm UK time")
+    if me.ap < EXPAND_COST:
+        raise HTTPException(status_code=400, detail=f"Expand costs {EXPAND_COST} AP — next resupply at 6pm UK time")
     if me.range >= MAX_RANGE:
         raise HTTPException(status_code=400, detail=f"Range is already at maximum ({MAX_RANGE})")
-    await db.players.update_one({"id": me.id}, {"$set": {"range": me.range + 1, "ap": me.ap - 1}})
+    ap = me.ap - EXPAND_COST
+    await db.players.update_one({"id": me.id}, {"$set": {"range": me.range + 1, "ap": ap}})
     await broadcast()
-    return to_player({**doc, "range": me.range + 1, "ap": me.ap - 1})
+    return to_player({**doc, "range": me.range + 1, "ap": ap})
 
 
 @router.post("/chat", response_model=ChatMessage)
-async def chat(req: ChatRequest):
-    doc = await auth_commander(req)
+async def chat(req: ChatRequest, request: Request):
+    doc = await auth_commander(request)
     text = req.text.strip()
     if not text:
         raise HTTPException(status_code=422, detail="Message cannot be empty")
@@ -599,8 +674,8 @@ def to_dm(doc: dict) -> DirectMessage:
 
 
 @router.post("/dm/send", response_model=DirectMessage)
-async def dm_send(req: DMSendRequest):
-    me = await auth_commander(req)
+async def dm_send(req: DMSendRequest, request: Request):
+    me = await auth_commander(request)
     text = req.text.strip()
     if not text:
         raise HTTPException(status_code=422, detail="Message cannot be empty")
@@ -623,9 +698,9 @@ async def dm_send(req: DMSendRequest):
 
 
 @router.post("/dm/thread", response_model=list[DirectMessage])
-async def dm_thread(req: DMThreadRequest):
+async def dm_thread(req: DMThreadRequest, request: Request):
     """The conversation between you and `with_id` (oldest first); marks their messages to you read."""
-    me = await auth_commander(req)
+    me = await auth_commander(request)
     pair = {"$or": [
         {"from_id": me["id"], "to_id": req.with_id},
         {"from_id": req.with_id, "to_id": me["id"]},
@@ -640,8 +715,8 @@ async def dm_thread(req: DMThreadRequest):
 
 
 @router.post("/dm/unread", response_model=UnreadCounts)
-async def dm_unread(req: ActionRequest):
-    me = await auth_commander(req)
+async def dm_unread(request: Request):
+    me = await auth_commander(request)
     rows = await db.dms.aggregate([
         {"$match": {"to_id": me["id"], "read": False}},
         {"$group": {"_id": "$from_id", "n": {"$sum": 1}}},

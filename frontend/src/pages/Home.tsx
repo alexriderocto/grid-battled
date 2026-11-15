@@ -181,6 +181,9 @@ export default function Home() {
   const pickingSpawn = newProfile !== null && pickedClass === "alliance";
   // Admin session (memory only — a refresh signs the admin out).
   const [adminPw, setAdminPw] = useState<string | null>(null);
+  // Admin teleport: player picked via the profile's Teleport button (click-to-place), or being dragged.
+  const [teleportId, setTeleportId] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
   const credsRef = useRef<Credentials | null>(null);
   const autoJoined = useRef(false);
   const joinedAtRef = useRef(0);
@@ -197,6 +200,7 @@ export default function Home() {
     ? (players.find((p) => p.id === sessionSelf.id) ?? sessionSelf)
     : null;
   const chat = playersQuery.data?.chat ?? [];
+  const settings = playersQuery.data?.settings;
   const [live, setLive] = useState(false);
 
   // Real-time sync: every join/move/attack/transfer/expand/chat is broadcast to all commanders.
@@ -450,6 +454,17 @@ export default function Home() {
     }
   };
 
+  const teleport = useMutation({
+    mutationFn: (v: { id: string; x: number; y: number }) =>
+      apiPost<Player>("/game/admin/teleport", { password: adminPw, target_id: v.id, x: v.x, y: v.y }),
+    onSuccess: (p) => {
+      setTeleportId(null);
+      void queryClient.invalidateQueries({ queryKey: ["board"] });
+      toast.success(`Teleported ${p.username} to [${p.x + 1}, ${p.y + 1}]`);
+    },
+    onError: (err) => toast.error(errorDetail(err, "Teleport failed")),
+  });
+
   const adminLogin = useMutation({
     mutationFn: (pw: string) => apiPost<AdminOk>("/game/admin/login", { password: pw }),
     onSuccess: (_res, pw) => {
@@ -510,6 +525,13 @@ export default function Home() {
   const toggleMode = (kind: ActionMode) => setMode((m) => (m === kind ? null : kind));
 
   const onCellClick = (x: number, y: number) => {
+    if (adminPw && teleportId) {
+      const occ = occupied.get(`${y}:${x}`);
+      if (occ && occ.id !== teleportId) toast.error(`Square occupied by ${occ.username}`);
+      else if (!occ) teleport.mutate({ id: teleportId, x, y });
+      else setTeleportId(null);
+      return;
+    }
     if (pickingSpawn) {
       if (occupied.has(`${y}:${x}`)) {
         toast.error("That square is occupied — pick a free one");
@@ -593,7 +615,11 @@ export default function Home() {
             <Users className="mr-1 size-3" />
             {playersQuery.isError
               ? "MAP OFFLINE"
-              : `${players.filter((p) => p.online).length} ONLINE · ${players.length} DEPLOYED`}
+              : `${players.filter((p) => p.online).length} ONLINE · ${players.length}${
+                  settings?.max_players_enabled ? `/${settings.max_players}` : ""
+                } DEPLOYED${
+                  settings?.max_players_enabled && players.length >= settings.max_players ? " · FULL" : ""
+                }`}
           </Badge>
           <Badge
             data-testid="live-sync-badge"
@@ -616,8 +642,10 @@ export default function Home() {
         <AdminConsole
           password={adminPw}
           playerCount={players.length}
+          settings={settings}
           onLeave={() => {
             setAdminPw(null);
+            setTeleportId(null);
             setProfileId(null);
             void queryClient.removeQueries({ queryKey: ["admin-bans"] });
             toast("Signed out of the admin console");
@@ -842,6 +870,25 @@ export default function Home() {
                           : `Grid cell row ${r + 1} col ${c + 1}`
                       }
                       onClick={() => onCellClick(c, r)}
+                      draggable={Boolean(adminPw && p)}
+                      onDragStart={(e) => {
+                        if (!adminPw || !p) return;
+                        e.dataTransfer.setData("text/plain", p.id);
+                        e.dataTransfer.effectAllowed = "move";
+                        setHover(null);
+                      }}
+                      onDragOver={(e) => {
+                        if (!adminPw || p) return;
+                        e.preventDefault(); // allow drop on empty squares only
+                        if (dragOver !== key) setDragOver(key);
+                      }}
+                      onDragLeave={() => setDragOver((k) => (k === key ? null : k))}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDragOver(null);
+                        const id = e.dataTransfer.getData("text/plain");
+                        if (adminPw && id && !p) teleport.mutate({ id, x: c, y: r });
+                      }}
                       onMouseEnter={(e) => {
                         if (p) setHover({ player: p, cx: e.clientX, cy: e.clientY });
                       }}
@@ -865,7 +912,11 @@ export default function Home() {
                             "border-slate-800/80 bg-[#0F172A] hover:border-sky-500/60 hover:bg-slate-800/90"
                       } ${targetRingFor(c, r, p)} ${p && !mode ? "cursor-pointer" : ""} ${
                         pickingSpawn && !p ? "cursor-crosshair hover:ring-1 hover:ring-amber-400/70" : ""
-                      } ${spawn && spawn.x === c && spawn.y === r ? "!border-amber-400 !bg-amber-500/25 ring-2 ring-amber-400" : ""}`}
+                      } ${spawn && spawn.x === c && spawn.y === r ? "!border-amber-400 !bg-amber-500/25 ring-2 ring-amber-400" : ""} ${
+                        dragOver === key ? "!border-amber-400 !bg-amber-500/25" : ""
+                      } ${adminPw && p ? "cursor-grab active:cursor-grabbing" : ""} ${
+                        adminPw && teleportId && !p ? "cursor-crosshair hover:ring-1 hover:ring-amber-400/70" : ""
+                      } ${adminPw && teleportId && p?.id === teleportId ? "ring-2 ring-amber-400" : ""}`}
                     >
                       {p && <AvatarToken player={p} isSelf={isSelf} />}
                       {!p && spawn && spawn.x === c && spawn.y === r && (
@@ -921,7 +972,22 @@ export default function Home() {
             <span className="ml-2 font-mono text-[10px] opacity-70">1 AP</span>
           </Button>
         </div>
-        {mode ? (
+        {adminPw && teleportId ? (
+          <p
+            data-testid="teleport-hint"
+            className="flex items-center gap-3 text-center font-mono text-[11px] uppercase tracking-[0.25em] text-amber-300"
+          >
+            Teleporting {players.find((p) => p.id === teleportId)?.username ?? "commander"} — click a free square
+            <button
+              type="button"
+              data-testid="teleport-cancel-button"
+              onClick={() => setTeleportId(null)}
+              className="rounded border border-amber-400/50 px-2 py-0.5 text-[10px] text-amber-200 transition-colors duration-150 hover:bg-amber-500/20"
+            >
+              Cancel
+            </button>
+          </p>
+        ) : mode ? (
           <p
             data-testid="action-hint"
             className="text-center font-mono text-[11px] uppercase tracking-[0.25em] text-sky-300"
@@ -958,6 +1024,10 @@ export default function Home() {
         self={self}
         creds={self ? credsRef.current : null}
         adminPassword={adminPw}
+        onTeleport={(id) => {
+          setTeleportId(id);
+          setProfileId(null);
+        }}
         onClose={() => setProfileId(null)}
       />
 

@@ -92,9 +92,15 @@ class ChatMessage(BaseModel):
     created_at: datetime
 
 
+class GameSettings(BaseModel):
+    max_players_enabled: bool = False
+    max_players: int = Field(default=20, ge=1, le=225)
+
+
 class BoardSnapshot(BaseModel):
     players: list[Player]
     chat: list[ChatMessage]
+    settings: GameSettings
 
 
 class NameCheckRequest(BaseModel):

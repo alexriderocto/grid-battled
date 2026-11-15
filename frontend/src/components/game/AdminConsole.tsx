@@ -3,7 +3,8 @@ import { formatDistanceToNow } from "date-fns";
 import { ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { apiPost, ApiError } from "@/lib/api";
-import type { AdminOk, BanEntry } from "@/lib/game";
+import type { AdminOk, BanEntry, GameSettings } from "@/lib/game";
+import PlayerCapControl from "@/components/game/PlayerCapControl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,10 +13,12 @@ import { Card, CardContent } from "@/components/ui/card";
 export default function AdminConsole({
   password,
   playerCount,
+  settings,
   onLeave,
 }: {
   password: string;
   playerCount: number;
+  settings: GameSettings | undefined;
   onLeave: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -67,8 +70,9 @@ export default function AdminConsole({
           </div>
         </div>
         <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">
-          Click any commander on the map or in the roster to kill, ban, set range or give AP.
+          Click any commander to kill, ban, teleport, set range or give AP · drag a token to teleport it.
         </p>
+        <PlayerCapControl password={password} settings={settings} playerCount={playerCount} />
         <div data-testid="admin-ban-list" className="flex flex-wrap gap-2">
           {list.length === 0 && (
             <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">No banned callsigns</span>

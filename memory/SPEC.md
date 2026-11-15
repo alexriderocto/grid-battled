@@ -42,6 +42,16 @@ Multiplayer strategy game (renamed from Terra Grid). Milestone 3: real-time mult
 - **Comms channel** (right): last 30 messages (`app.messages`), 1–140 chars, must be deployed to send.
   `POST /api/game/chat {username, password, text}` -> ChatMessage | 401 | 422.
 
+## Player cap + admin teleport (milestone 8)
+- **Max player count (toggleable)**: `app.settings {_id:"game", max_players_enabled, max_players 1–225}`
+  (defaults off/20). GameSettings is public in every snapshot (`BoardState.settings`). When ON and
+  deployed count >= cap, NEW callsigns are refused by /name-check and /join (403 "The grid is full (n/max …)");
+  existing commanders can always rejoin; lowering the cap never kicks anyone. Header shows "n/max DEPLOYED · FULL".
+  Admin console: PlayerCapControl (checkbox + number + Save) -> `POST /api/game/admin/settings {password, max_players_enabled, max_players}`.
+- **Teleport**: `POST /api/game/admin/teleport {password, target_id, x, y}` (400 occupied, 404 gone, 422 off-board;
+  updates last_moved). UI: admin drags any token onto an empty square (HTML5 DnD, amber drop highlight), OR
+  profile -> "Teleport" -> click a free square (phone-friendly; amber hint + Cancel under the map).
+
 ## Admin (milestone 7) — creds in memory/test_credentials.md
 - Sign in with callsign `Admin` + ADMIN_PASSWORD (backend/.env, "314159") in the normal join form ->
   `POST /api/game/admin/login {password}`. Admin is NOT a token on the map; AdminConsole replaces the banner

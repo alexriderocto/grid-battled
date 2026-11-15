@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Ban, Gauge, Skull, Zap } from "lucide-react";
+import { Ban, Gauge, Move, Skull, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { apiPost, ApiError } from "@/lib/api";
 import { ADMIN_MAX_RANGE } from "@/lib/game";
@@ -23,7 +23,15 @@ function detailOf(err: unknown, fallback: string): string {
 }
 
 /** Admin-only controls inside a commander's profile: kill, ban, set range, give AP. */
-export default function AdminControls({ player, password }: { player: Player; password: string }) {
+export default function AdminControls({
+  player,
+  password,
+  onTeleport,
+}: {
+  player: Player;
+  password: string;
+  onTeleport: () => void;
+}) {
   const queryClient = useQueryClient();
   const [rangeInput, setRangeInput] = useState(String(player.range));
   const [apInput, setApInput] = useState("1");
@@ -95,6 +103,11 @@ export default function AdminControls({ player, password }: { player: Player; pa
         </Button>
       </div>
 
+      <Button variant="outline" data-testid="admin-teleport-button" onClick={onTeleport}>
+        <Move className="mr-2 size-4" />
+        Teleport — then click a free square
+      </Button>
+
       <form
         className="flex items-center gap-2"
         onSubmit={(e) => {
@@ -141,7 +154,7 @@ export default function AdminControls({ player, password }: { player: Player; pa
         </Button>
       </form>
       <p className="font-mono text-[9px] uppercase tracking-wider text-slate-500">
-        Range 0–{ADMIN_MAX_RANGE} · negative AP removes it · ban also removes them from the map
+        Tip: you can also drag tokens on the map · Range 0–{ADMIN_MAX_RANGE} · negative AP removes it
       </p>
     </div>
   );

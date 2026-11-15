@@ -10,9 +10,11 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 
 from lib.db import db
-from models.admin import AdminAuth, AdminGiveAp, AdminOk, AdminSetRange, AdminTarget, AdminUnban, BanEntry
-from models.game import Player
-from routers.game import accrue, broadcast, to_player, utc_now
+from models.admin import (
+    AdminAuth, AdminGiveAp, AdminOk, AdminSetRange, AdminSettings, AdminTarget, AdminTeleport, AdminUnban, BanEntry,
+)
+from models.game import GameSettings, Player
+from routers.game import accrue, broadcast, get_settings, to_player, utc_now
 
 router = APIRouter(prefix="/game/admin", tags=["admin"])
 
@@ -109,3 +111,27 @@ async def give_ap(req: AdminGiveAp, request: Request):
     await db.players.update_one({"id": doc["id"]}, {"$set": {"ap": ap}})
     await broadcast()
     return to_player({**doc, "ap": ap})
+
+
+@router.post("/teleport", response_model=Player)
+async def teleport(req: AdminTeleport, request: Request):
+    check_admin(request, req.password)
+    doc = await _target(req.target_id)
+    if (doc["x"], doc["y"]) == (req.x, req.y):
+        return to_player(doc)
+    occupant = await db.players.find_one({"x": req.x, "y": req.y}, {"username": 1})
+    if occupant:
+        raise HTTPException(status_code=400, detail=f"Square occupied by {occupant['username']}")
+    now = utc_now()
+    await db.players.update_one({"id": doc["id"]}, {"$set": {"x": req.x, "y": req.y, "last_moved": now}})
+    await broadcast()
+    return to_player({**doc, "x": req.x, "y": req.y, "last_moved": now})
+
+
+@router.post("/settings", response_model=GameSettings)
+async def save_settings(req: AdminSettings, request: Request):
+    check_admin(request, req.password)
+    settings = GameSettings(max_players_enabled=req.max_players_enabled, max_players=req.max_players)
+    await db.settings.update_one({"_id": "game"}, {"$set": settings.model_dump()}, upsert=True)
+    await broadcast()
+    return settings

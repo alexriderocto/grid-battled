@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from models.game import ADMIN_MAX_RANGE
+from models.game import ADMIN_MAX_RANGE, GameSettings
 
 
 class AdminAuth(BaseModel):
@@ -21,6 +21,15 @@ class AdminSetRange(AdminTarget):
 
 class AdminGiveAp(AdminTarget):
     amount: int = Field(ge=-99, le=99)  # negative removes AP (floored at 0)
+
+
+class AdminTeleport(AdminTarget):
+    x: int = Field(ge=0, le=14)
+    y: int = Field(ge=0, le=14)
+
+
+class AdminSettings(AdminAuth, GameSettings):
+    """Password + the full settings object to save."""
 
 
 class AdminUnban(AdminAuth):

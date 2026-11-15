@@ -31,6 +31,7 @@ from models.game import (
     ActionRequest,
     AttackResponse,
     BoardSnapshot,
+    GameSettings,
     ChatMessage,
     ChatRequest,
     DirectMessage,
@@ -151,6 +152,20 @@ def to_message(doc: dict) -> ChatMessage:
     )
 
 
+async def get_settings() -> GameSettings:
+    doc = await db.settings.find_one({"_id": "game"})
+    return GameSettings(**{k: v for k, v in (doc or {}).items() if k != "_id"})
+
+
+async def full_message(count: int | None = None) -> str | None:
+    """None if a NEW commander may deploy; otherwise the 'grid is full' message."""
+    s = await get_settings()
+    if not s.max_players_enabled:
+        return None
+    n = count if count is not None else await db.players.count_documents({})
+    return f"The grid is full ({n}/{s.max_players} commanders) — try again later" if n >= s.max_players else None
+
+
 async def build_snapshot() -> str:
     """Full board snapshot (players + recent chat) as JSON, with AP accrual applied."""
     docs = await db.players.find().sort("created_at", 1).to_list(BOARD * BOARD)
@@ -159,7 +174,8 @@ async def build_snapshot() -> str:
         players.append(to_player(await accrue(raw)).model_dump(mode="json"))
     chat_docs = await db.messages.find().sort("created_at", -1).to_list(CHAT_HISTORY)
     chat = [to_message(d).model_dump(mode="json") for d in reversed(chat_docs)]
-    return json.dumps({"players": players, "chat": chat})
+    settings = (await get_settings()).model_dump()
+    return json.dumps({"players": players, "chat": chat, "settings": settings})
 
 
 async def broadcast() -> None:
@@ -240,7 +256,9 @@ async def state():
     docs = await db.players.find().sort("created_at", 1).to_list(BOARD * BOARD)
     players = [to_player(await accrue(d)) for d in docs]
     chat_docs = await db.messages.find().sort("created_at", -1).to_list(CHAT_HISTORY)
-    return BoardSnapshot(players=players, chat=[to_message(d) for d in reversed(chat_docs)])
+    return BoardSnapshot(
+        players=players, chat=[to_message(d) for d in reversed(chat_docs)], settings=await get_settings()
+    )
 
 
 @router.post("/name-check", response_model=NameCheckResponse)
@@ -251,6 +269,10 @@ async def name_check(req: NameCheckRequest):
         return NameCheckResponse(allowed=False, detail=REJECTION)
     if await db.bans.find_one({"username_key": name.lower()}):
         return NameCheckResponse(allowed=False, detail=BANNED)
+    if not await db.players.find_one({"username_key": name.lower()}, {"_id": 1}):
+        full = await full_message()
+        if full:
+            return NameCheckResponse(allowed=False, detail=full)
     return NameCheckResponse(allowed=True)
 
 
@@ -282,6 +304,9 @@ async def join(req: JoinRequest):
     #   standard: random FREE square (pure-random fallback once the board fills up), 1 AP now.
     #   alliance: the square they chose (must be free), and the first two AP grants are withheld.
     placed = await db.players.find({}, {"x": 1, "y": 1, "color": 1}).to_list(BOARD * BOARD)
+    full = await full_message(len(placed))  # the cap only blocks NEW commanders; rejoins always work
+    if full:
+        raise HTTPException(status_code=403, detail=full)
     taken = {(d["x"], d["y"]) for d in placed}
     if req.player_class == "alliance":
         if req.spawn_x is None or req.spawn_y is None:

@@ -35,12 +35,14 @@ export default function ProfileDialog({
   self,
   creds,
   adminPassword,
+  onTeleport,
   onClose,
 }: {
   player: Player | null;
   self: Player | null;
   creds: Credentials | null;
   adminPassword: string | null;
+  onTeleport: (playerId: string) => void;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -145,7 +147,13 @@ export default function ProfileDialog({
               <Stat label="Health" value={`${player.health} / ${MAX_HEALTH}`} testId="profile-health" />
             </div>
 
-            {adminPassword && <AdminControls player={player} password={adminPassword} />}
+            {adminPassword && (
+              <AdminControls
+                player={player}
+                password={adminPassword}
+                onTeleport={() => onTeleport(player.id)}
+              />
+            )}
 
             {canMessage ? (
               <div className="flex flex-col gap-2">

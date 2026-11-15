@@ -52,6 +52,13 @@ export interface ChatMessage {
 export interface BoardState {
   players: Player[];
   chat: ChatMessage[];
+  settings: GameSettings;
+}
+
+// Mirror of backend/models/game.py::GameSettings — admin-controlled, public in every snapshot.
+export interface GameSettings {
+  max_players_enabled: boolean;
+  max_players: number;
 }
 
 // Mirror of the backend's token palette (models/game.py TOKEN_COLORS = 8).
